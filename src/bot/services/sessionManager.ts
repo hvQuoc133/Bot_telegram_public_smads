@@ -26,7 +26,19 @@ export type UserState =
   | 'editing_personnel_name'
   | 'editing_personnel_birthday'
   | 'editing_personnel_position'
-  | 'editing_personnel_phone';
+  | 'editing_personnel_phone'
+  | 'creating_announcement_step_1'
+  | 'creating_announcement_step_2'
+  | 'creating_announcement_step_3'
+  | 'creating_announcement_step_4'
+  | 'creating_announcement_step_5_options'
+  | 'creating_announcement_step_5'
+  | 'editing_announcement_step_1'
+  | 'editing_announcement_step_2'
+  | 'editing_announcement_step_3'
+  | 'editing_announcement_step_4'
+  | 'editing_announcement_step_5_options'
+  | 'editing_announcement_step_5';
 
 export interface SessionData {
   state: UserState;

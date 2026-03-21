@@ -4,10 +4,14 @@ import { handleMessage } from './core/messageHandler';
 import { handleCallbackQuery } from './core/callbackHandler';
 import { setupCommands } from './utils/setupCommands';
 import { bot } from './botInstance';
+import { startScheduler } from './services/scheduler';
 
 export function initBot() {
   // Setup commands for the menu button
   setupCommands(bot);
+
+  // Start the background scheduler
+  startScheduler();
 
   // Handle incoming messages
   bot.on('message', handleMessage);

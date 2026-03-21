@@ -131,6 +131,22 @@ export async function initDb() {
         file_unique_id TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS announcements (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        content TEXT NOT NULL,
+        scheduled_at TIMESTAMP,
+        is_holiday BOOLEAN DEFAULT FALSE,
+        status VARCHAR(50) DEFAULT 'pending',
+        created_by BIGINT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      ALTER TABLE announcements ALTER COLUMN scheduled_at DROP NOT NULL;
+      ALTER TABLE announcements ADD COLUMN IF NOT EXISTS event_start_time TIMESTAMP;
+      ALTER TABLE announcements ADD COLUMN IF NOT EXISTS event_end_time TIMESTAMP;
+
       -- Add unique constraint if it doesn't exist
       DO $$
       BEGIN

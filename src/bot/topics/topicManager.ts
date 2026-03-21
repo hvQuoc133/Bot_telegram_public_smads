@@ -46,10 +46,14 @@ export async function handleSetTopicCommand(
             await sendInformationDashboard(bot, chatId, topicId, userRole, replyOptions);
             bot.deleteMessage(chatId, msg.message_id).catch(() => { });
             return true;
+        } else if (feature === 'announcement') {
+            await sendAnnouncementDashboard(bot, chatId, topicId, userRole, replyOptions);
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+            return true;
         } else if (userRole === 'admin' && command === '/menu') {
             // Topic is not set, show setup options for Admin
             const otherTopics = await db.query(
-                'SELECT feature_type FROM topics WHERE chat_id = $1 AND feature_type IN (\'regulation\', \'report\')',
+                'SELECT feature_type FROM topics WHERE chat_id = $1 AND feature_type IN (\'regulation\', \'report\', \'information\', \'announcement\')',
                 [chatId]
             );
             const setFeatures = otherTopics.rows.map(r => r.feature_type);
@@ -63,6 +67,9 @@ export async function handleSetTopicCommand(
             }
             if (!setFeatures.includes('information')) {
                 keyboard.push([{ text: '📇 Cài đặt làm nơi xem Thông tin', callback_data: 'topic_set_information' }]);
+            }
+            if (!setFeatures.includes('announcement')) {
+                keyboard.push([{ text: '📢 Cài đặt làm nơi xem Thông báo', callback_data: 'topic_set_announcement' }]);
             }
 
             if (keyboard.length === 0) {
@@ -87,9 +94,9 @@ export async function handleSetTopicCommand(
         return false;
     }
 
-    if (command === '/set_topic_regulation' || command === '/set_topic_report' || command === '/set_topic_information') {
-        const featureType = command === '/set_topic_regulation' ? 'regulation' : (command === '/set_topic_report' ? 'report' : 'information');
-        const featureName = featureType === 'regulation' ? 'Nội quy' : (featureType === 'report' ? 'Báo cáo' : 'Thông tin');
+    if (command === '/set_topic_regulation' || command === '/set_topic_report' || command === '/set_topic_information' || command === '/set_topic_announcement') {
+        const featureType = command === '/set_topic_regulation' ? 'regulation' : (command === '/set_topic_report' ? 'report' : (command === '/set_topic_information' ? 'information' : 'announcement'));
+        const featureName = featureType === 'regulation' ? 'Nội quy' : (featureType === 'report' ? 'Báo cáo' : (featureType === 'information' ? 'Thông tin' : 'Thông báo'));
 
         if (userRole !== 'admin') {
             bot.sendMessage(chatId, `❌ Bạn không có quyền. Chỉ Admin của bot mới có quyền cài đặt topic ${featureName}.`, replyOptions)
@@ -105,7 +112,7 @@ export async function handleSetTopicCommand(
             );
             const currentFeature = currentTopicRes.rows[0]?.feature_type;
             if (currentFeature && currentFeature !== 'discussion') {
-                const currentFeatureName = currentFeature === 'regulation' ? 'Nội quy' : (currentFeature === 'report' ? 'Báo cáo' : 'Thông tin');
+                const currentFeatureName = currentFeature === 'regulation' ? 'Nội quy' : (currentFeature === 'report' ? 'Báo cáo' : (currentFeature === 'information' ? 'Thông tin' : 'Thông báo'));
                 bot.sendMessage(chatId, `⚠️ Topic này đã được cài đặt tính năng *${currentFeatureName}*.\n\nBạn phải hủy cài đặt hiện tại trước khi thiết lập tính năng mới.`, { ...replyOptions, parse_mode: 'Markdown' })
                     .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
                 bot.deleteMessage(chatId, msg.message_id).catch(() => { });
@@ -201,6 +208,20 @@ export async function handleSetTopicCommand(
           ON CONFLICT (chat_id, topic_id) 
           DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
         `, [chatId, topicId || 0, msg.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
+            } else if (featureType === 'announcement') {
+                const text = '📢 *THÔNG BÁO CÔNG TY*\n\nChào mừng bạn đến với kênh thông báo. Các thông báo mới sẽ được tự động gửi vào đây.';
+                const sentMsg = await bot.sendMessage(chatId, text, {
+                    ...replyOptions,
+                    parse_mode: 'Markdown'
+                });
+                await bot.pinChatMessage(chatId, sentMsg.message_id).catch(console.error);
+
+                await db.query(`
+          INSERT INTO topics (chat_id, topic_id, name, feature_type, pinned_message_id) 
+          VALUES ($1, $2, $3, $4, $5) 
+          ON CONFLICT (chat_id, topic_id) 
+          DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
+        `, [chatId, topicId || 0, msg.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
             }
 
             topicCache.delete(targetId);
@@ -219,7 +240,7 @@ export async function handleSetTopicCommand(
         return true;
     }
 
-    if (command === '/unset_topic_regulation' || command === '/unset_topic_report' || command === '/unset_topic_information' || command === '/unset_topic') {
+    if (command === '/unset_topic_regulation' || command === '/unset_topic_report' || command === '/unset_topic_information' || command === '/unset_topic_announcement' || command === '/unset_topic') {
         if (userRole !== 'admin') {
             bot.sendMessage(chatId, '❌ Bạn không có quyền thực hiện lệnh này.', replyOptions)
                 .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
@@ -254,6 +275,12 @@ export async function handleSetTopicCommand(
         }
         if (command === '/unset_topic_information' && feature !== 'information') {
             bot.sendMessage(chatId, '⚠️ Topic này không được cài đặt tính năng Thông tin.', replyOptions)
+                .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+            return true;
+        }
+        if (command === '/unset_topic_announcement' && feature !== 'announcement') {
+            bot.sendMessage(chatId, '⚠️ Topic này không được cài đặt tính năng Thông báo.', replyOptions)
                 .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
             bot.deleteMessage(chatId, msg.message_id).catch(() => { });
             return true;
@@ -394,6 +421,41 @@ export async function sendReportDashboard(
     }).then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), deleteTime));
 }
 
+export async function sendAnnouncementDashboard(
+    bot: TelegramBot,
+    chatId: number,
+    topicId: number,
+    userRole: string,
+    replyOptions: TelegramBot.SendMessageOptions
+) {
+    let text = '';
+    let keyboard: InlineKeyboardButton[][] = [];
+
+    if (userRole === 'admin') {
+        const anns = await db.query("SELECT id, title FROM announcements WHERE is_holiday = false ORDER BY scheduled_at DESC LIMIT 10");
+        text = '📢 *QUẢN LÝ THÔNG BÁO*\n\nChào Admin, vui lòng chọn chức năng quản lý bên dưới:';
+        keyboard = anns.rows.length > 0
+            ? anns.rows.map(a => [{ text: `📌 ${a.title}`, callback_data: `ann_admin_view_${a.id}` }])
+            : [];
+        keyboard.push([
+            { text: '➕ Thêm Thông báo', url: `https://t.me/${botUsername}?start=create_announcement` },
+            { text: '⚙️ Hủy cài đặt Topic', callback_data: 'topic_unset_request' }
+        ]);
+    } else {
+        text = '📢 *THÔNG BÁO CÔNG TY*\n\nChào mừng bạn đến với kênh thông báo. Các thông báo mới sẽ được tự động gửi vào đây.';
+    }
+
+    keyboard.push([{ text: '🔄 Làm mới', callback_data: 'ann_reload' }, { text: '❌ Đóng', callback_data: 'info_close_message' }]);
+
+    const deleteTime = userRole === 'admin' ? 60000 : 30000;
+
+    return bot.sendMessage(chatId, text, {
+        ...replyOptions,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: keyboard }
+    }).then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), deleteTime));
+}
+
 export async function handleTopicCallback(
     bot: TelegramBot,
     query: TelegramBot.CallbackQuery,
@@ -412,14 +474,14 @@ export async function handleTopicCallback(
 
     console.log(`[TopicCallback] Data: ${data}, Role: ${userRole}, Topic: ${topicId}, Chat: ${chatId}`);
 
-    if (data === 'topic_set_regulation' || data === 'topic_set_report' || data === 'topic_set_information') {
+    if (data === 'topic_set_regulation' || data === 'topic_set_report' || data === 'topic_set_information' || data === 'topic_set_announcement') {
         if (userRole !== 'admin') {
             bot.answerCallbackQuery(query.id, { text: '❌ Chỉ Admin mới có quyền cài đặt.', show_alert: true });
             return true;
         }
 
-        const featureType = data === 'topic_set_regulation' ? 'regulation' : (data === 'topic_set_report' ? 'report' : 'information');
-        const featureName = featureType === 'regulation' ? 'Nội quy' : (featureType === 'report' ? 'Báo cáo' : 'Thông tin');
+        const featureType = data === 'topic_set_regulation' ? 'regulation' : (data === 'topic_set_report' ? 'report' : (data === 'topic_set_information' ? 'information' : 'announcement'));
+        const featureName = featureType === 'regulation' ? 'Nội quy' : (featureType === 'report' ? 'Báo cáo' : (featureType === 'information' ? 'Thông tin' : 'Thông báo'));
 
         try {
             // Check if already set in another topic
@@ -504,6 +566,20 @@ export async function handleTopicCallback(
                     message_thread_id: topicId || undefined,
                     parse_mode: 'Markdown',
                     reply_markup: { inline_keyboard: keyboard }
+                });
+                await bot.pinChatMessage(chatId, sentMsg.message_id).catch(console.error);
+
+                await db.query(`
+          INSERT INTO topics (chat_id, topic_id, name, feature_type, pinned_message_id) 
+          VALUES ($1, $2, $3, $4, $5) 
+          ON CONFLICT (chat_id, topic_id) 
+          DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
+        `, [chatId, topicId || 0, query.message?.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
+            } else if (featureType === 'announcement') {
+                const text = '📢 *THÔNG BÁO CÔNG TY*\n\nChào mừng bạn đến với kênh thông báo. Các thông báo mới sẽ được tự động gửi vào đây.';
+                const sentMsg = await bot.sendMessage(chatId, text, {
+                    message_thread_id: topicId || undefined,
+                    parse_mode: 'Markdown'
                 });
                 await bot.pinChatMessage(chatId, sentMsg.message_id).catch(console.error);
 
@@ -610,6 +686,8 @@ export async function handleTopicCallback(
             await sendReportDashboard(bot, chatId, topicId, userRole, options);
         } else if (feature === 'information') {
             await sendInformationDashboard(bot, chatId, topicId, userRole, options);
+        } else if (feature === 'announcement') {
+            await sendAnnouncementDashboard(bot, chatId, topicId, userRole, options);
         } else {
             // If no feature, just show the setup menu
             handleSetTopicCommand(bot, {

@@ -369,7 +369,10 @@ export async function handleAdminDashboard(
             { text: '👥 Quản lý Admin', callback_data: 'admin_manage_admins' },
             { text: '⚙️ Cài đặt Topic', callback_data: 'admin_manage_topics' }
         ],
-        [{ text: '📇 Quản lý Nhân sự', callback_data: 'admin_manage_personnel' }],
+        [
+            { text: '📇 Quản lý Nhân sự', callback_data: 'admin_manage_personnel' },
+            { text: '📢 Quản lý Thông báo', callback_data: 'admin_manage_announcements' }
+        ],
         [{ text: '❌ Đóng Menu', callback_data: 'admin_close_dashboard' }]
     ];
 
@@ -424,6 +427,24 @@ export async function handleAdminCallback(
             [{ text: '➕ Thêm Nội quy mới', url: `https://t.me/${botUsername}?start=create_regulation` }],
             [{ text: '✏️ Sửa Nội quy', callback_data: 'reg_edit_list' }],
             [{ text: '🗑 Xóa Nội quy', callback_data: 'reg_delete_list' }],
+            [{ text: '🔙 Quay lại', callback_data: 'admin_dashboard' }]
+        ];
+        bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: keyboard }
+        }).catch(console.error);
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data === 'admin_manage_announcements') {
+        const text = `📢 **QUẢN LÝ THÔNG BÁO**\n\nChọn thao tác bạn muốn thực hiện:`;
+        const keyboard = [
+            [{ text: '➕ Thêm Thông báo mới', url: `https://t.me/${botUsername}?start=create_announcement` }],
+            [{ text: '📋 Danh sách Thông báo', callback_data: 'ann_admin_list' }],
+            [{ text: '📅 Thông báo Lễ Tự động', callback_data: 'ann_admin_holiday_list' }],
             [{ text: '🔙 Quay lại', callback_data: 'admin_dashboard' }]
         ];
         bot.editMessageText(text, {

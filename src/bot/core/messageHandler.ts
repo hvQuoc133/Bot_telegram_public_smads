@@ -4,10 +4,11 @@ import { db } from '../../db';
 import { bot, botUsername } from '../botInstance';
 import { setAdminPrivateCommands, removeAdminPrivateCommands } from '../utils/setupCommands';
 import { handleAdminCommand, handleAdminState, handleAdminDeepLink, handleAdminDashboard } from '../topics/adminTopic';
-import { handleRegulationCommand, handleRegulationDeepLink, handleRegulationState, handleGroupRegulationCommand, refreshAllRegulationTopics } from '../topics/regulationTopic';
+import { handleRegulationCommand, handleRegulationDeepLink, handleRegulationState, refreshAllRegulationTopics } from '../topics/regulationTopic';
 import { handleSetTopicCommand, getTopicFeature } from '../topics/topicManager';
 import { handleReportDeepLink, handleReportState, handleReportCallback } from '../topics/reportTopic';
 import { handleGroupInfoCommand, handleInfoMessage, handleInfoDeepLink } from '../topics/infoTopic';
+import { handleAnnouncementDeepLink, handleAnnouncementState } from '../topics/announcementTopic';
 
 const commandCache = new Map<string, number>();
 const COMMAND_COOLDOWN = 15000; // 15 seconds
@@ -107,15 +108,15 @@ export async function handleMessage(msg: TelegramBot.Message) {
     const { feature, targetId } = await getTopicFeature(chatId, topicId);
 
     // Prevent chatting in specific topics
-    if ((feature === 'regulation' || feature === 'report' || feature === 'information') && !text.startsWith('/')) {
+    if ((feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement') && !text.startsWith('/')) {
       bot.deleteMessage(chatId, msg.message_id).catch(() => { });
       bot.sendMessage(chatId, '⚠️ Topic này không được chat, chỉ được xem và sử dụng lệnh /.', replyOptions)
         .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
       return;
     }
 
-    // If it's a regulation, report, or information topic, auto-delete the user's message after 5s
-    if (feature === 'regulation' || feature === 'report' || feature === 'information') {
+    // If it's a regulation, report, information, or announcement topic, auto-delete the user's message after 5s
+    if (feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement') {
       setTimeout(() => bot.deleteMessage(chatId, msg.message_id).catch(() => { }), 5000);
     }
 
@@ -215,6 +216,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
         if (await handleAdminDeepLink(bot, msg, param, userRole)) return;
         if (await handleReportDeepLink(bot, msg, param, userRole)) return;
         if (await handleInfoDeepLink(bot, msg, param, userRole, session)) return;
+        if (await handleAnnouncementDeepLink(bot, msg, param, userRole, session)) return;
       }
 
       if (userRole === 'admin') {
@@ -224,6 +226,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
         const keyboard = [
           [{ text: '📜 Xem Nội quy', callback_data: 'reg_list' }],
           [{ text: '📇 Xem Thông tin Nhân sự', callback_data: 'info_list' }],
+          [{ text: '📢 Xem Thông báo', callback_data: 'ann_user_list' }],
           [
             { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
             { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
@@ -252,7 +255,8 @@ export async function handleMessage(msg: TelegramBot.Message) {
       if (command === '/skip' && (
         session.state === 'editing_regulation_step_1' ||
         session.state === 'editing_regulation_step_2' ||
-        session.state.startsWith('editing_personnel_')
+        session.state.startsWith('editing_personnel_') ||
+        session.state.startsWith('editing_announcement_')
       )) {
         // allow /skip command to pass through to the state machine
       } else {
@@ -266,6 +270,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
     if (await handleRegulationState(bot, msg, command, userRole, session)) return;
     if (await handleReportState(bot, msg, session)) return;
     if (await handleInfoMessage(bot, msg, session.state, userId)) return;
+    if (await handleAnnouncementState(bot, msg, command, userRole, session)) return;
 
     // Handle commands if idle
     if (command === '/admin') {

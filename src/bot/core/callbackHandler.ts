@@ -7,6 +7,7 @@ import { handleAdminCallback } from '../topics/adminTopic';
 import { handleReportCallback } from '../topics/reportTopic';
 import { handleTopicCallback } from '../topics/topicManager';
 import { handleInfoCallback } from '../topics/infoTopic';
+import { handleAnnouncementCallback } from '../topics/announcementTopic';
 
 export async function handleCallbackQuery(query: TelegramBot.CallbackQuery) {
   const chatId = query.message?.chat.id;
@@ -54,6 +55,11 @@ export async function handleCallbackQuery(query: TelegramBot.CallbackQuery) {
       if (handled) return;
     }
 
+    if (data.startsWith('ann_')) {
+      const handled = await handleAnnouncementCallback(bot, query, data, userRole);
+      if (handled) return;
+    }
+
     if (data.startsWith('topic_')) {
       console.log(`[Callback] Handling topic callback: ${data}`);
       const handled = await handleTopicCallback(bot, query, data, userRole);
@@ -69,6 +75,7 @@ export async function handleCallbackQuery(query: TelegramBot.CallbackQuery) {
       const keyboard = [
         [{ text: '📜 Xem Nội quy', callback_data: 'reg_list' }],
         [{ text: '📇 Xem Thông tin Nhân sự', callback_data: 'info_list' }],
+        [{ text: '📢 Xem Thông báo', callback_data: 'ann_user_list' }],
         [
           { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
           { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
