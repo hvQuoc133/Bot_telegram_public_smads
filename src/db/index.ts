@@ -155,6 +155,26 @@ export async function initDb() {
         END IF;
       END
       $$;
+      CREATE TABLE IF NOT EXISTS tool_categories (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        created_by BIGINT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS tools (
+        id SERIAL PRIMARY KEY,
+        category_id INTEGER REFERENCES tool_categories(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        link TEXT,
+        file_id VARCHAR(255),
+        file_type VARCHAR(50),
+        created_by BIGINT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     console.log('Database tables initialized');
   } finally {

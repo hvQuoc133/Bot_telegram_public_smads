@@ -373,6 +373,9 @@ export async function handleAdminDashboard(
             { text: '📇 Quản lý Nhân sự', callback_data: 'admin_manage_personnel' },
             { text: '📢 Quản lý Thông báo', callback_data: 'admin_manage_announcements' }
         ],
+        [
+            { text: '🛠 Quản lý Công cụ', callback_data: 'admin_manage_tools' }
+        ],
         [{ text: '❌ Đóng Menu', callback_data: 'admin_close_dashboard' }]
     ];
 
@@ -427,6 +430,25 @@ export async function handleAdminCallback(
             [{ text: '➕ Thêm Nội quy mới', url: `https://t.me/${botUsername}?start=create_regulation` }],
             [{ text: '✏️ Sửa Nội quy', callback_data: 'reg_edit_list' }],
             [{ text: '🗑 Xóa Nội quy', callback_data: 'reg_delete_list' }],
+            [{ text: '🔙 Quay lại', callback_data: 'admin_dashboard' }]
+        ];
+        bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: keyboard }
+        }).catch(console.error);
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data === 'admin_manage_tools') {
+        const text = `🛠 **QUẢN LÝ CÔNG CỤ**\n\nChọn thao tác bạn muốn thực hiện:`;
+        const keyboard = [
+            [{ text: '➕ Thêm Danh mục Công cụ', url: `https://t.me/${botUsername}?start=tools_cat_add` }],
+            [{ text: '📋 Danh sách Danh mục', callback_data: 'tools_cat_list' }],
+            [{ text: '➕ Thêm Công cụ mới', url: `https://t.me/${botUsername}?start=tools_add` }],
+            [{ text: '📋 Danh sách Công cụ', callback_data: 'tools_admin_list' }],
             [{ text: '🔙 Quay lại', callback_data: 'admin_dashboard' }]
         ];
         bot.editMessageText(text, {

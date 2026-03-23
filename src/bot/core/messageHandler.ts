@@ -9,6 +9,7 @@ import { handleSetTopicCommand, getTopicFeature } from '../topics/topicManager';
 import { handleReportDeepLink, handleReportState, handleReportCallback } from '../topics/reportTopic';
 import { handleGroupInfoCommand, handleInfoMessage, handleInfoDeepLink } from '../topics/infoTopic';
 import { handleAnnouncementDeepLink, handleAnnouncementState } from '../topics/announcementTopic';
+import { handleToolsDeepLink, handleToolsState, handleToolsCommand } from '../topics/toolsTopic';
 
 const commandCache = new Map<string, number>();
 const COMMAND_COOLDOWN = 15000; // 15 seconds
@@ -108,15 +109,15 @@ export async function handleMessage(msg: TelegramBot.Message) {
     const { feature, targetId } = await getTopicFeature(chatId, topicId);
 
     // Prevent chatting in specific topics
-    if ((feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement') && !text.startsWith('/')) {
+    if ((feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement' || feature === 'tools') && !text.startsWith('/')) {
       bot.deleteMessage(chatId, msg.message_id).catch(() => { });
       bot.sendMessage(chatId, '⚠️ Topic này không được chat, chỉ được xem và sử dụng lệnh /.', replyOptions)
         .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
       return;
     }
 
-    // If it's a regulation, report, information, or announcement topic, auto-delete the user's message after 5s
-    if (feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement') {
+    // If it's a regulation, report, information, announcement, or tools topic, auto-delete the user's message after 5s
+    if (feature === 'regulation' || feature === 'report' || feature === 'information' || feature === 'announcement' || feature === 'tools') {
       setTimeout(() => bot.deleteMessage(chatId, msg.message_id).catch(() => { }), 5000);
     }
 
@@ -164,6 +165,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
     }
 
     if (await handleAdminCommand(bot, msg, command, userRole, session, replyOptions)) return;
+    if (await handleToolsCommand(bot, msg, command, userRole, session, replyOptions)) return;
 
     // If user types management commands in group, tell them to DM the bot
     if (['/create_regulation', '/edit_regulation', '/delete_regulation', '/cancel'].includes(command)) {
@@ -217,6 +219,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
         if (await handleReportDeepLink(bot, msg, param, userRole)) return;
         if (await handleInfoDeepLink(bot, msg, param, userRole, session)) return;
         if (await handleAnnouncementDeepLink(bot, msg, param, userRole, session)) return;
+        if (await handleToolsDeepLink(bot, msg, param, userRole, session)) return;
       }
 
       if (userRole === 'admin') {
@@ -227,6 +230,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
           [{ text: '📜 Xem Nội quy', callback_data: 'reg_list' }],
           [{ text: '📇 Xem Thông tin Nhân sự', callback_data: 'info_list' }],
           [{ text: '📢 Xem Thông báo', callback_data: 'ann_user_list' }],
+          [{ text: '🛠 Xem Công cụ', callback_data: 'tools_list' }],
           [
             { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
             { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
@@ -256,7 +260,14 @@ export async function handleMessage(msg: TelegramBot.Message) {
         session.state === 'editing_regulation_step_1' ||
         session.state === 'editing_regulation_step_2' ||
         session.state.startsWith('editing_personnel_') ||
-        session.state.startsWith('editing_announcement_')
+        session.state.startsWith('editing_announcement_') ||
+        session.state === 'adding_tool_desc' ||
+        session.state === 'adding_tool_category_desc' ||
+        session.state === 'editing_tool_desc' ||
+        session.state === 'editing_tool_category_desc' ||
+        session.state === 'editing_tool_link_or_file' ||
+        session.state === 'editing_tool_category_name' ||
+        session.state === 'editing_tool_name'
       )) {
         // allow /skip command to pass through to the state machine
       } else {
@@ -271,6 +282,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
     if (await handleReportState(bot, msg, session)) return;
     if (await handleInfoMessage(bot, msg, session.state, userId)) return;
     if (await handleAnnouncementState(bot, msg, command, userRole, session)) return;
+    if (await handleToolsState(bot, msg, command, userRole, session)) return;
 
     // Handle commands if idle
     if (command === '/admin') {
@@ -283,6 +295,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
 
     if (await handleAdminCommand(bot, msg, command, userRole, session, replyOptions)) return;
     if (await handleRegulationCommand(bot, msg, command, userRole, session, replyOptions)) return;
+    if (await handleToolsCommand(bot, msg, command, userRole, session, replyOptions)) return;
 
     // Add a secret command to claim admin if needed
     if (command === '/claim_admin') {

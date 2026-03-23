@@ -38,7 +38,17 @@ export type UserState =
   | 'editing_announcement_step_3'
   | 'editing_announcement_step_4'
   | 'editing_announcement_step_5_options'
-  | 'editing_announcement_step_5';
+  | 'editing_announcement_step_5'
+  | 'adding_tool_category_name'
+  | 'adding_tool_category_desc'
+  | 'editing_tool_category_name'
+  | 'editing_tool_category_desc'
+  | 'adding_tool_name'
+  | 'adding_tool_desc'
+  | 'adding_tool_link_or_file'
+  | 'editing_tool_name'
+  | 'editing_tool_desc'
+  | 'editing_tool_link_or_file';
 
 export interface SessionData {
   state: UserState;
