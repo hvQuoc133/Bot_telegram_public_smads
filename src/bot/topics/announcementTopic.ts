@@ -41,8 +41,24 @@ export async function handleAnnouncementDeepLink(
         }
 
         const ann = res.rows[0];
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nĐang sửa thông báo: *${ann.title}*\n\nBước 1: Nhập **Tiêu đề mới** (hoặc gõ /skip để giữ nguyên):\n\n_(Gõ /cancel để hủy)_`, { parse_mode: 'Markdown' });
-        updateSession(userId, { state: 'editing_announcement_step_1', tempData: { id, title: ann.title, content: ann.content, scheduledAt: ann.scheduled_at, promptMessageId: prompt.message_id } });
+
+        let text = `📢 *ĐANG SỬA THÔNG BÁO*\n\n`;
+        text += `*Tiêu đề:* ${ann.title}\n`;
+        text += `*Nội dung:* ${ann.content.substring(0, 100)}...\n`;
+        if (ann.event_start_time) text += `*Bắt đầu:* ${new Date(ann.event_start_time).toLocaleString('vi-VN')}\n`;
+        if (ann.event_end_time) text += `*Kết thúc:* ${new Date(ann.event_end_time).toLocaleString('vi-VN')}\n`;
+
+        const keyboard: InlineKeyboardButton[][] = [
+            [{ text: '📝 Sửa Tiêu đề', callback_data: `ann_edit_field_title_${id}` }],
+            [{ text: '📄 Sửa Nội dung', callback_data: `ann_edit_field_content_${id}` }],
+            [{ text: '🕒 Sửa Thời gian', callback_data: `ann_edit_field_time_${id}` }],
+            [{ text: '🔙 Hủy', callback_data: `ann_edit_cancel_${id}` }]
+        ];
+
+        bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } })
+            .then(m => {
+                updateSession(userId, { state: 'idle', tempData: { id, title: ann.title, content: ann.content, scheduledAt: ann.scheduled_at, promptMessageId: m.message_id } });
+            });
         return true;
     }
 
@@ -91,6 +107,40 @@ async function saveNewAnnouncement(bot: TelegramBot, chatId: number, userId: num
     }
 
     clearSession(userId);
+}
+
+async function broadcastUpdatedAnnouncement(bot: TelegramBot, id: number) {
+    try {
+        const annRes = await db.query('SELECT * FROM announcements WHERE id = $1 AND status = $2', [id, 'published']);
+        if (annRes.rows.length === 0) return; // Only broadcast if it's already published
+
+        const ann = annRes.rows[0];
+        const topicsRes = await db.query("SELECT chat_id, topic_id FROM topics WHERE feature_type = 'announcement'");
+
+        let timeText = '';
+        if (ann.event_start_time && ann.event_end_time) {
+            timeText = `\n⏰ *Thời gian:* ${new Date(ann.event_start_time).toLocaleString('vi-VN')} - ${new Date(ann.event_end_time).toLocaleString('vi-VN')}\n`;
+        } else if (ann.event_start_time) {
+            timeText = `\n⏰ *Bắt đầu:* ${new Date(ann.event_start_time).toLocaleString('vi-VN')}\n`;
+        } else if (ann.event_end_time) {
+            timeText = `\n⏰ *Kết thúc:* ${new Date(ann.event_end_time).toLocaleString('vi-VN')}\n`;
+        }
+
+        const msgText = `📢 *THÔNG BÁO CẬP NHẬT*\n\n*${ann.title}*${timeText}\n${ann.content}`;
+
+        for (const topic of topicsRes.rows) {
+            try {
+                await bot.sendMessage(topic.chat_id, msgText, {
+                    message_thread_id: topic.topic_id || undefined,
+                    parse_mode: 'Markdown'
+                });
+            } catch (err) {
+                console.error(`Failed to broadcast updated announcement to ${topic.chat_id}/${topic.topic_id}:`, err);
+            }
+        }
+    } catch (err) {
+        console.error('Error broadcasting updated announcement:', err);
+    }
 }
 
 async function updateAnnouncement(bot: TelegramBot, chatId: number, userId: number, session: any, scheduledAt: Date | null) {
@@ -277,33 +327,49 @@ export async function handleAnnouncementState(
         return true;
     }
 
-    if (session.state === 'editing_announcement_step_1') {
+    if (session.state === 'editing_announcement_title' || session.state === 'editing_announcement_content') {
         if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
         bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
-        const title = command === '/skip' ? session.tempData.title : text;
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nTiêu đề: *${title}*\n\nBước 2: Nhập **Nội dung mới** (hoặc gõ /skip để giữ nguyên):\n\n_(Gõ /cancel để hủy)_`, { parse_mode: 'Markdown' });
-        updateSession(userId, { state: 'editing_announcement_step_2', tempData: { ...session.tempData, title, promptMessageId: prompt.message_id } });
+        const id = session.tempData.id;
+        const field = session.state.replace('editing_announcement_', '');
+
+        try {
+            let updateQuery = '';
+            let updateParams: any[] = [];
+
+            if (field === 'title') {
+                updateQuery = 'UPDATE announcements SET title = $1 WHERE id = $2';
+                updateParams = [text, id];
+            } else if (field === 'content') {
+                updateQuery = 'UPDATE announcements SET content = $1 WHERE id = $2';
+                updateParams = [text, id];
+            }
+
+            await db.query(updateQuery, updateParams);
+
+            bot.sendMessage(chatId, '✅ Đã cập nhật thông báo thành công!').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+
+            await broadcastUpdatedAnnouncement(bot, id);
+
+            if (session.tempData.viewMessageId) {
+                bot.deleteMessage(chatId, session.tempData.viewMessageId).catch(() => { });
+                await handleAnnouncementDeepLink(bot, msg, `edit_announcement_${id}`, userRole, session);
+            }
+        } catch (err) {
+            console.error('Error updating announcement:', err);
+            bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật thông báo.');
+        }
+
+        clearSession(userId);
         return true;
     }
 
-    if (session.state === 'editing_announcement_step_2') {
+    if (session.state === 'editing_announcement_time') {
         if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
         bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
-        const content = command === '/skip' ? session.tempData.content : text;
-        const title = session.tempData.title;
-
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nTiêu đề: *${title}*\n\nBước 3: Nhập **Thời gian bắt đầu sự kiện mới** (Định dạng: DD/MM/YYYY HH:mm, ví dụ: 30/04/2024 08:00):\n\n_(Gõ /skip để giữ nguyên, /cancel để hủy)_`, { parse_mode: 'Markdown' });
-        updateSession(userId, { state: 'editing_announcement_step_3', tempData: { ...session.tempData, content, promptMessageId: prompt.message_id } });
-        return true;
-    }
-
-    if (session.state === 'editing_announcement_step_3') {
-        if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
-        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
-
-        let eventStartTime: Date | null = session.tempData.eventStartTime;
+        let eventStartTime: Date | null = null;
         if (command !== '/skip') {
             const parts = text.split(/[\s/:-]+/);
             if (parts.length >= 5) {
@@ -317,31 +383,29 @@ export async function handleAnnouncementState(
                 if (eventStartTime.getDate() !== day || eventStartTime.getMonth() !== month || eventStartTime.getFullYear() !== year || eventStartTime.getHours() !== hour || eventStartTime.getMinutes() !== minute) {
                     eventStartTime = null;
                 }
-            } else {
-                eventStartTime = null;
             }
             if (!eventStartTime || isNaN(eventStartTime.getTime())) {
-                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:');
-                updateSession(userId, { state: 'editing_announcement_step_3', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
-                return true;
-            }
-            if (eventStartTime < new Date()) {
-                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Không thể chọn thời gian trong quá khứ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:');
-                updateSession(userId, { state: 'editing_announcement_step_3', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
+                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:', {
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `ann_edit_cancel_${session.tempData.id}` }]] }
+                });
+                updateSession(userId, { state: 'editing_announcement_time', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
                 return true;
             }
         }
 
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nBước 4: Nhập **Thời gian kết thúc sự kiện mới** (Định dạng: DD/MM/YYYY HH:mm):\n\n_(Gõ /skip để giữ nguyên, /cancel để hủy)_`, { parse_mode: 'Markdown' });
-        updateSession(userId, { state: 'editing_announcement_step_4', tempData: { ...session.tempData, eventStartTime, promptMessageId: prompt.message_id } });
+        const prompt = await bot.sendMessage(chatId, `🕒 Vui lòng nhập *Thời gian kết thúc* mới (DD/MM/YYYY HH:mm) hoặc gõ /skip nếu không có thời gian kết thúc:`, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `ann_edit_cancel_${session.tempData.id}` }]] }
+        });
+        updateSession(userId, { state: 'editing_announcement_time_end', tempData: { ...session.tempData, eventStartTime, promptMessageId: prompt.message_id } });
         return true;
     }
 
-    if (session.state === 'editing_announcement_step_4') {
+    if (session.state === 'editing_announcement_time_end') {
         if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
         bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
-        let eventEndTime: Date | null = session.tempData.eventEndTime;
+        let eventEndTime: Date | null = null;
         if (command !== '/skip') {
             const parts = text.split(/[\s/:-]+/);
             if (parts.length >= 5) {
@@ -355,57 +419,61 @@ export async function handleAnnouncementState(
                 if (eventEndTime.getDate() !== day || eventEndTime.getMonth() !== month || eventEndTime.getFullYear() !== year || eventEndTime.getHours() !== hour || eventEndTime.getMinutes() !== minute) {
                     eventEndTime = null;
                 }
-            } else {
-                eventEndTime = null;
             }
             if (!eventEndTime || isNaN(eventEndTime.getTime())) {
-                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:');
-                updateSession(userId, { state: 'editing_announcement_step_4', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
-                return true;
-            }
-            if (eventEndTime < new Date()) {
-                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Không thể chọn thời gian trong quá khứ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:');
-                updateSession(userId, { state: 'editing_announcement_step_4', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
+                const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ. Vui lòng nhập lại (DD/MM/YYYY HH:mm) hoặc /skip:', {
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `ann_edit_cancel_${session.tempData.id}` }]] }
+                });
+                updateSession(userId, { state: 'editing_announcement_time_end', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
                 return true;
             }
         }
 
-        const keyboard = [
-            [{ text: '🚀 Gửi ngay', callback_data: 'ann_edit_send_now' }],
-            [{ text: '📅 Đặt lịch hẹn', callback_data: 'ann_edit_schedule' }],
-            [{ text: '⏭️ Giữ nguyên', callback_data: 'ann_edit_skip' }],
-            [{ text: '❌ Hủy', callback_data: 'ann_edit_cancel' }]
-        ];
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nBước 5: Chọn phương thức gửi thông báo mới:`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-        updateSession(userId, { state: 'editing_announcement_step_5_options', tempData: { ...session.tempData, eventEndTime, promptMessageId: prompt.message_id } });
-        return true;
-    }
+        const id = session.tempData.id;
+        const eventStartTime = session.tempData.eventStartTime;
 
-    if (session.state === 'editing_announcement_step_5') {
-        if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
-        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+        try {
+            let updateQuery = 'UPDATE announcements SET ';
+            let updateParams: any[] = [];
+            let paramIndex = 1;
 
-        let scheduledAt: Date | null = null;
-        const parts = text.split(/[\s/:-]+/);
-        if (parts.length >= 5) {
-            const day = parseInt(parts[0]);
-            const month = parseInt(parts[1]) - 1;
-            const year = parseInt(parts[2]);
-            const hour = parseInt(parts[3]);
-            const minute = parseInt(parts[4]);
-            scheduledAt = new Date(year, month, day, hour, minute);
-
-            if (scheduledAt.getDate() !== day || scheduledAt.getMonth() !== month || scheduledAt.getFullYear() !== year || scheduledAt.getHours() !== hour || scheduledAt.getMinutes() !== minute) {
-                scheduledAt = null;
+            if (eventStartTime !== undefined && command !== '/skip' && session.tempData.eventStartTime !== null) {
+                updateQuery += `event_start_time = $${paramIndex++}, `;
+                updateParams.push(eventStartTime);
+            } else if (eventStartTime === null) {
+                updateQuery += `event_start_time = NULL, `;
             }
-        }
-        if (!scheduledAt || isNaN(scheduledAt.getTime()) || scheduledAt <= new Date()) {
-            const prompt = await bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ hoặc đã qua. Vui lòng nhập lại (DD/MM/YYYY HH:mm):');
-            updateSession(userId, { state: 'editing_announcement_step_5', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
-            return true;
+
+            if (eventEndTime !== undefined && command !== '/skip' && eventEndTime !== null) {
+                updateQuery += `event_end_time = $${paramIndex++} `;
+                updateParams.push(eventEndTime);
+            } else if (eventEndTime === null) {
+                updateQuery += `event_end_time = NULL `;
+            } else {
+                updateQuery = updateQuery.slice(0, -2); // Remove trailing comma and space
+            }
+
+            if (updateParams.length > 0 || eventStartTime === null || eventEndTime === null) {
+                updateQuery += ` WHERE id = $${paramIndex}`;
+                updateParams.push(id);
+                await db.query(updateQuery, updateParams);
+                bot.sendMessage(chatId, '✅ Đã cập nhật thời gian thông báo thành công!').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+
+                await broadcastUpdatedAnnouncement(bot, id);
+            } else {
+                bot.sendMessage(chatId, '✅ Không có thay đổi nào được thực hiện.').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+            }
+
+            if (session.tempData.viewMessageId) {
+                bot.deleteMessage(chatId, session.tempData.viewMessageId).catch(() => { });
+                await handleAnnouncementDeepLink(bot, msg, `edit_announcement_${id}`, userRole, session);
+            }
+        } catch (err) {
+            console.error('Error updating announcement time:', err);
+            bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật thông báo.');
         }
 
-        await updateAnnouncement(bot, chatId, userId, session, scheduledAt);
+        clearSession(userId);
         return true;
     }
 
@@ -424,6 +492,41 @@ export async function handleAnnouncementCallback(
     const topicId = query.message?.message_thread_id || 0;
 
     if (!chatId || !messageId) return false;
+
+    if (data.startsWith('ann_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[3];
+        const id = parts[4];
+        const session = getSession(userId);
+
+        let promptText = '';
+        if (field === 'title') promptText = '📝 Vui lòng nhập *Tiêu đề* mới cho Thông báo:';
+        if (field === 'content') promptText = '📄 Vui lòng nhập *Nội dung* mới cho Thông báo:';
+        if (field === 'time') promptText = '🕒 Vui lòng nhập *Thời gian bắt đầu* mới (DD/MM/YYYY HH:mm) hoặc /skip:';
+
+        bot.sendMessage(chatId, promptText, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `ann_edit_cancel_${id}` }]] }
+        }).then(m => {
+            updateSession(userId, {
+                state: `editing_announcement_${field}` as any,
+                tempData: { ...session.tempData, id, promptMessageId: m.message_id, viewMessageId: messageId }
+            });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('ann_edit_cancel_')) {
+        const id = data.split('_')[3];
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa thông báo.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Menu', callback_data: 'ann_dashboard' }]] }
+        });
+        clearSession(userId);
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
 
     if (data === 'ann_create_send_now') {
         const session = getSession(userId);
@@ -449,44 +552,6 @@ export async function handleAnnouncementCallback(
         if (session.state !== 'creating_announcement_step_5_options') return true;
         bot.deleteMessage(chatId, messageId).catch(() => { });
         bot.sendMessage(chatId, '❌ Đã hủy tạo thông báo.');
-        clearSession(userId);
-        bot.answerCallbackQuery(query.id);
-        return true;
-    }
-
-    if (data === 'ann_edit_send_now') {
-        const session = getSession(userId);
-        if (session.state !== 'editing_announcement_step_5_options') return true;
-        bot.deleteMessage(chatId, messageId).catch(() => { });
-        await updateAnnouncement(bot, chatId, userId, session, null);
-        bot.answerCallbackQuery(query.id);
-        return true;
-    }
-
-    if (data === 'ann_edit_schedule') {
-        const session = getSession(userId);
-        if (session.state !== 'editing_announcement_step_5_options') return true;
-        const prompt = await bot.sendMessage(chatId, `📢 *SỬA THÔNG BÁO*\n\nNhập **Thời gian gửi thông báo mới** (Định dạng: DD/MM/YYYY HH:mm):\n\n_(Gõ /cancel để hủy)_`, { parse_mode: 'Markdown' });
-        updateSession(userId, { state: 'editing_announcement_step_5', tempData: { ...session.tempData, promptMessageId: prompt.message_id } });
-        bot.deleteMessage(chatId, messageId).catch(() => { });
-        bot.answerCallbackQuery(query.id);
-        return true;
-    }
-
-    if (data === 'ann_edit_skip') {
-        const session = getSession(userId);
-        if (session.state !== 'editing_announcement_step_5_options') return true;
-        bot.deleteMessage(chatId, messageId).catch(() => { });
-        await updateAnnouncement(bot, chatId, userId, session, session.tempData.scheduledAt);
-        bot.answerCallbackQuery(query.id);
-        return true;
-    }
-
-    if (data === 'ann_edit_cancel') {
-        const session = getSession(userId);
-        if (session.state !== 'editing_announcement_step_5_options') return true;
-        bot.deleteMessage(chatId, messageId).catch(() => { });
-        bot.sendMessage(chatId, '❌ Đã hủy sửa thông báo.');
         clearSession(userId);
         bot.answerCallbackQuery(query.id);
         return true;

@@ -174,7 +174,7 @@ export async function handleProposalState(
             formattedDate = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
 
             const keyboardCost = [[{ text: '⏭ Bỏ qua', callback_data: 'prop_skip_cost' }]];
-            bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua (Ví dụ 888.000 vnd hoặc $77):', {
+            bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua:', {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboardCost }
             }).then(m => {
@@ -222,7 +222,146 @@ export async function handleProposalState(
             await showProposalPreview(bot, chatId, userId, { ...session.tempData, file_id: fileId, file_type: fileType }, msg.from);
             return true;
 
-        case 'rejecting_proposal':
+        case 'editing_proposal_content':
+        case 'editing_proposal_time':
+        case 'editing_proposal_cost':
+        case 'editing_proposal_file': {
+            if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+
+            const propId = session.tempData.proposalId;
+            const field = session.state.replace('editing_proposal_', '');
+
+            try {
+                const checkRes = await db.query('SELECT * FROM proposals WHERE id = $1 AND user_id = $2', [propId, userId]);
+                if (checkRes.rows.length === 0 || checkRes.rows[0].status !== 'PENDING') {
+                    bot.sendMessage(chatId, '⚠️ Đề xuất này đã được xử lý, không thể chỉnh sửa nữa.').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+                    clearSession(userId);
+                    return true;
+                }
+
+                const prop = checkRes.rows[0];
+                let updateQuery = '';
+                let updateParams: any[] = [];
+
+                if (field === 'content') {
+                    updateQuery = 'UPDATE proposals SET content = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+                    updateParams = [text, propId];
+                    prop.content = text;
+                } else if (field === 'time') {
+                    let applyTimeDate: Date | null = null;
+                    let formattedDate = text;
+                    const parts = text.split(/[\s/:-]+/);
+                    if (parts.length >= 3) {
+                        const day = parseInt(parts[0]);
+                        const month = parseInt(parts[1]) - 1;
+                        const year = parseInt(parts[2]);
+                        applyTimeDate = new Date(year, month, day);
+                        if (applyTimeDate.getDate() !== day || applyTimeDate.getMonth() !== month || applyTimeDate.getFullYear() !== year) {
+                            applyTimeDate = null;
+                        }
+                    }
+                    if (!applyTimeDate || isNaN(applyTimeDate.getTime())) {
+                        bot.sendMessage(chatId, '⚠️ Lỗi: Thời gian không hợp lệ. Vui lòng nhập lại (DD/MM/YYYY):', {
+                            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `prop_edit_cancel_${propId}` }]] }
+                        }).then(m => {
+                            updateSession(userId, { state: session.state, tempData: { ...session.tempData, promptMessageId: m.message_id } });
+                        });
+                        return true;
+                    }
+                    formattedDate = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+                    updateQuery = 'UPDATE proposals SET apply_time = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+                    updateParams = [formattedDate, propId];
+                    prop.apply_time = formattedDate;
+                } else if (field === 'cost') {
+                    updateQuery = 'UPDATE proposals SET cost = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+                    updateParams = [text, propId];
+                    prop.cost = text;
+                } else if (field === 'file') {
+                    let newFileId = null;
+                    let newFileType = null;
+                    if (msg.photo) {
+                        newFileId = msg.photo[msg.photo.length - 1].file_id;
+                        newFileType = 'photo';
+                    } else if (msg.document) {
+                        newFileId = msg.document.file_id;
+                        newFileType = 'document';
+                    } else {
+                        bot.sendMessage(chatId, '⚠️ Vui lòng gửi file/ảnh hợp lệ:').then(m => {
+                            updateSession(userId, { state: session.state, tempData: { ...session.tempData, promptMessageId: m.message_id } });
+                        });
+                        return true;
+                    }
+                    updateQuery = 'UPDATE proposals SET file_id = $1, file_type = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3';
+                    updateParams = [newFileId, newFileType, propId];
+                    prop.file_id = newFileId;
+                    prop.file_type = newFileType;
+                }
+
+                await db.query(updateQuery, updateParams);
+
+                if (prop.message_id && prop.chat_id) {
+                    const userRes = await db.query('SELECT first_name, last_name, username FROM users WHERE id = $1', [prop.user_id]);
+                    const u = userRes.rows[0];
+                    const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username || 'Unknown';
+                    const typeName = getProposalTypeName(prop.type);
+
+                    let reportText = `📝 *ĐỀ XUẤT MỚI: ${prop.proposal_code}*\n\n`;
+                    reportText += `👤 *Người đề xuất:* ${fullName} ${u.username ? `(@${u.username})` : ''}\n`;
+                    reportText += `🏷 *Loại:* ${typeName}\n`;
+                    reportText += `📅 *Ngày tạo:* ${new Date(prop.created_at).toLocaleString('vi-VN')}\n`;
+                    reportText += `*(Đã chỉnh sửa)*\n\n`;
+                    reportText += `📄 *Nội dung:*\n${prop.content}\n\n`;
+                    if (prop.apply_time) reportText += `🕒 *Thời gian áp dụng:* ${prop.apply_time}\n`;
+                    if (prop.cost) reportText += `💰 *Dự trù chi phí:* ${prop.cost}\n`;
+
+                    const keyboard: InlineKeyboardButton[][] = [
+                        [
+                            { text: '✅ Duyệt', callback_data: `prop_approve_${prop.id}` },
+                            { text: '❌ Từ chối', callback_data: `prop_reject_${prop.id}` }
+                        ]
+                    ];
+
+                    if (field === 'file') {
+                        bot.deleteMessage(prop.chat_id, prop.message_id).catch(() => { });
+                        let sentMsg;
+                        if (prop.file_type === 'photo') {
+                            sentMsg = await bot.sendPhoto(prop.chat_id, prop.file_id, { caption: reportText, parse_mode: 'Markdown', message_thread_id: prop.topic_id || undefined, reply_markup: { inline_keyboard: keyboard } });
+                        } else {
+                            sentMsg = await bot.sendDocument(prop.chat_id, prop.file_id, { caption: reportText, parse_mode: 'Markdown', message_thread_id: prop.topic_id || undefined, reply_markup: { inline_keyboard: keyboard } });
+                        }
+                        await db.query('UPDATE proposals SET message_id = $1 WHERE id = $2', [sentMsg.message_id, prop.id]);
+                    } else {
+                        if (prop.file_id) {
+                            bot.editMessageCaption(reportText, { chat_id: prop.chat_id, message_id: prop.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } }).catch(console.error);
+                        } else {
+                            bot.editMessageText(reportText, { chat_id: prop.chat_id, message_id: prop.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } }).catch(console.error);
+                        }
+                    }
+                }
+
+                bot.sendMessage(chatId, '✅ Đã cập nhật đề xuất thành công!').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+
+                if (session.tempData.viewMessageId) {
+                    bot.deleteMessage(chatId, session.tempData.viewMessageId).catch(() => { });
+                    const fakeQuery = {
+                        id: 'fake',
+                        from: msg.from,
+                        message: { chat: { id: chatId }, message_id: session.tempData.viewMessageId }
+                    } as TelegramBot.CallbackQuery;
+                    await handleProposalCallback(bot, fakeQuery, `prop_view_${propId}`, 'user', session);
+                }
+
+            } catch (err) {
+                console.error('Error updating proposal:', err);
+                bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật đề xuất.');
+            }
+
+            clearSession(userId);
+            return true;
+        }
+
+        case 'rejecting_proposal': {
             if (session.tempData.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
             bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
@@ -285,6 +424,7 @@ export async function handleProposalState(
 
             clearSession(userId);
             return true;
+        }
     }
 
     return false;
@@ -321,7 +461,7 @@ export async function handleProposalCallback(
     if (data === 'prop_skip_time') {
         bot.deleteMessage(chatId, messageId!).catch(() => { });
         const keyboardCost = [[{ text: '⏭ Bỏ qua', callback_data: 'prop_skip_cost' }]];
-        bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua (Ví dụ 888.000 vnd hoặc $77):', {
+        bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua:', {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboardCost }
         }).then(m => {
@@ -607,7 +747,14 @@ export async function handleProposalCallback(
             ]);
         }
 
-        keyboard.push([{ text: '🗑 Đóng', callback_data: 'prop_close_temp' }]);
+        if (userId.toString() === prop.user_id.toString() && prop.status === 'PENDING') {
+            keyboard.push([
+                { text: '✏️ Chỉnh sửa', callback_data: `prop_edit_menu_${prop.id}` },
+                { text: '↩️ Thu hồi', callback_data: `prop_recall_${prop.id}` }
+            ]);
+        }
+
+        keyboard.push([{ text: '🔙 Quay lại danh sách', callback_data: 'prop_close_temp' }]);
 
         if (prop.file_id) {
             if (prop.file_type === 'photo') {
@@ -623,8 +770,171 @@ export async function handleProposalCallback(
         return true;
     }
 
+    if (data.startsWith('prop_recall_')) {
+        const propId = data.replace('prop_recall_', '');
+        try {
+            const checkRes = await db.query('SELECT status, message_id, chat_id FROM proposals WHERE id = $1 AND user_id = $2', [propId, userId]);
+            if (checkRes.rows.length === 0 || checkRes.rows[0].status !== 'PENDING') {
+                bot.answerCallbackQuery(query.id, { text: '⚠️ Đề xuất này đã được xử lý hoặc không thể thu hồi.', show_alert: true });
+                return true;
+            }
+
+            const prop = checkRes.rows[0];
+            await db.query("UPDATE proposals SET status = 'RECALLED', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [propId]);
+
+            if (prop.message_id && prop.chat_id) {
+                const text = '❌ *Đề xuất đã được người gửi thu hồi.*';
+                bot.editMessageText(text, { chat_id: prop.chat_id, message_id: prop.message_id, parse_mode: 'Markdown' }).catch(() => {
+                    bot.editMessageCaption(text, { chat_id: prop.chat_id, message_id: prop.message_id, parse_mode: 'Markdown' }).catch(() => { });
+                });
+            }
+
+            bot.editMessageText('✅ Đã thu hồi đề xuất thành công.', { chat_id: chatId, message_id: messageId }).catch(() => { });
+            bot.answerCallbackQuery(query.id, { text: '✅ Đã thu hồi đề xuất!' });
+        } catch (err) {
+            console.error(err);
+            bot.answerCallbackQuery(query.id, { text: '❌ Có lỗi xảy ra.', show_alert: true });
+        }
+        return true;
+    }
+
+    if (data.startsWith('prop_edit_back_')) {
+        const propId = data.replace('prop_edit_back_', '');
+        const propRes = await db.query('SELECT * FROM proposals WHERE id = $1', [propId]);
+        if (propRes.rows.length > 0) {
+            const prop = propRes.rows[0];
+            const keyboard: InlineKeyboardButton[][] = [];
+            if (userRole === 'admin' && prop.status === 'PENDING') {
+                keyboard.push([
+                    { text: '✅ Duyệt', callback_data: `prop_approve_${prop.id}` },
+                    { text: '❌ Từ chối', callback_data: `prop_reject_${prop.id}` }
+                ]);
+            }
+            if (userId.toString() === prop.user_id.toString() && prop.status === 'PENDING') {
+                keyboard.push([
+                    { text: '✏️ Chỉnh sửa', callback_data: `prop_edit_menu_${prop.id}` },
+                    { text: '↩️ Thu hồi', callback_data: `prop_recall_${prop.id}` }
+                ]);
+            }
+            keyboard.push([{ text: '🔙 Quay lại danh sách', callback_data: 'prop_close_temp' }]);
+            bot.editMessageReplyMarkup({ inline_keyboard: keyboard }, { chat_id: chatId, message_id: messageId }).catch(() => { });
+        }
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('prop_edit_menu_')) {
+        const propId = data.replace('prop_edit_menu_', '');
+        const keyboard: InlineKeyboardButton[][] = [
+            [{ text: '📝 Sửa Nội dung', callback_data: `prop_edit_field_content_${propId}` }],
+            [{ text: '🕒 Sửa Thời gian', callback_data: `prop_edit_field_time_${propId}` }],
+            [{ text: '💰 Sửa Chi phí', callback_data: `prop_edit_field_cost_${propId}` }],
+            [{ text: '📎 Sửa File đính kèm', callback_data: `prop_edit_field_file_${propId}` }],
+            [{ text: '🔙 Quay lại', callback_data: `prop_edit_back_${propId}` }]
+        ];
+        bot.editMessageReplyMarkup({ inline_keyboard: keyboard }, { chat_id: chatId, message_id: messageId }).catch(() => { });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('prop_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[3];
+        const propId = parts[4];
+
+        let promptText = '';
+        if (field === 'content') promptText = '📝 Vui lòng nhập *Nội dung* mới cho đề xuất:';
+        if (field === 'time') promptText = '🕒 Vui lòng nhập *Thời gian áp dụng* mới (DD/MM/YYYY):';
+        if (field === 'cost') promptText = '💰 Vui lòng nhập *Dự trù chi phí* mới:';
+        if (field === 'file') promptText = '📎 Vui lòng gửi *File/Ảnh đính kèm* mới:';
+
+        bot.sendMessage(chatId, promptText, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `prop_edit_cancel_${propId}` }]] }
+        }).then(m => {
+            updateSession(userId, {
+                state: `editing_proposal_${field}` as any,
+                tempData: { proposalId: propId, promptMessageId: m.message_id, viewMessageId: messageId }
+            });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('prop_edit_cancel_')) {
+        const propId = data.split('_')[3];
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        const viewMessageId = session.tempData?.viewMessageId;
+        if (viewMessageId) {
+            const propRes = await db.query('SELECT * FROM proposals WHERE id = $1', [propId]);
+            if (propRes.rows.length > 0) {
+                const prop = propRes.rows[0];
+                const keyboard: InlineKeyboardButton[][] = [];
+                if (userRole === 'admin' && prop.status === 'PENDING') {
+                    keyboard.push([
+                        { text: '✅ Duyệt', callback_data: `prop_approve_${prop.id}` },
+                        { text: '❌ Từ chối', callback_data: `prop_reject_${prop.id}` }
+                    ]);
+                }
+                if (userId.toString() === prop.user_id.toString() && prop.status === 'PENDING') {
+                    keyboard.push([
+                        { text: '✏️ Chỉnh sửa', callback_data: `prop_edit_menu_${prop.id}` },
+                        { text: '↩️ Thu hồi', callback_data: `prop_recall_${prop.id}` }
+                    ]);
+                }
+                keyboard.push([{ text: '🔙 Quay lại danh sách', callback_data: 'prop_close_temp' }]);
+                bot.editMessageReplyMarkup({ inline_keyboard: keyboard }, { chat_id: chatId, message_id: viewMessageId }).catch(() => { });
+            }
+        }
+        clearSession(userId);
+        bot.answerCallbackQuery(query.id, { text: '✅ Đã hủy chỉnh sửa.' });
+        return true;
+    }
+
     if (data === 'prop_close_temp') {
         bot.deleteMessage(chatId, messageId!).catch(() => { });
+
+        // Send the proposal list again to ensure they see it
+        if (userRole === 'admin') {
+            const keyboard: InlineKeyboardButton[][] = [
+                [{ text: '⏳ Chờ duyệt', callback_data: 'prop_admin_filter_PENDING' }],
+                [{ text: '✅ Đã duyệt', callback_data: 'prop_admin_filter_APPROVED' }],
+                [{ text: '❌ Từ chối', callback_data: 'prop_admin_filter_REJECTED' }],
+                [{ text: '👤 Lọc theo User', callback_data: 'prop_admin_filter_user' }],
+                [{ text: '🔙 Quay lại Menu Admin', callback_data: 'admin_dashboard' }]
+            ];
+            bot.sendMessage(chatId, '📋 *QUẢN LÝ ĐỀ XUẤT*\n\nChọn bộ lọc để xem danh sách đề xuất:', {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            });
+        } else {
+            const res = await db.query(
+                'SELECT id, proposal_code, type, status, created_at FROM proposals WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
+                [userId]
+            );
+            if (res.rows.length > 0) {
+                const keyboard = res.rows.map(r => {
+                    let statusEmoji = '⏳';
+                    if (r.status === 'APPROVED') statusEmoji = '✅';
+                    if (r.status === 'REJECTED') statusEmoji = '❌';
+                    let typeName = '';
+                    if (r.type === 'cost') typeName = 'Chi phí';
+                    if (r.type === 'work') typeName = 'Công việc';
+                    if (r.type === 'policy') typeName = 'Nội quy';
+                    if (r.type === 'tool') typeName = 'Công cụ';
+                    return [{
+                        text: `${statusEmoji} [${r.proposal_code}] ${typeName} (${new Date(r.created_at).toLocaleDateString('vi-VN')})`,
+                        callback_data: `prop_view_${r.id}`
+                    }];
+                });
+                keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'user_dashboard' }]);
+                bot.sendMessage(chatId, '📋 *LỊCH SỬ ĐỀ XUẤT CỦA BẠN:*', {
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
+            }
+        }
+
         bot.answerCallbackQuery(query.id);
         return true;
     }

@@ -82,7 +82,6 @@ export async function handleReportDeepLink(
             text: `📄 ${r.title} (${new Date(r.created_at).toLocaleDateString('vi-VN')})`,
             callback_data: `rep_view_detail_${r.id}`
         }]);
-        keyboard.push([{ text: '🗑 Đóng', callback_data: 'reg_close_temp' }]);
 
         bot.sendMessage(chatId, '📋 *DANH SÁCH BÁO CÁO CỦA BẠN:*', {
             parse_mode: 'Markdown',
@@ -467,7 +466,8 @@ export async function handleReportCallback(
         const isPrivate = query.message?.chat.type === 'private';
         const text = `📊 Bạn đã nộp tổng cộng ${count} báo cáo.`;
         const keyboard = [
-            [{ text: '📋 Xem danh sách báo cáo của tôi', callback_data: 'rep_my_list' }]
+            [{ text: '📋 Xem danh sách báo cáo của tôi', callback_data: 'rep_my_list' }],
+            ([{ text: '🔙 Quay lại', callback_data: 'user_dashboard' }])
         ];
 
         if (!isPrivate) {
@@ -550,6 +550,7 @@ export async function handleReportCallback(
             callback_data: `rep_view_detail_${r.id}`
         }]);
 
+        keyboard.push([{ text: '🔙 Quay lại', callback_data: 'admin_manage_reports' }]);
         if (!isPrivate) {
             keyboard.push([{ text: '🗑 Đóng', callback_data: 'reg_close_temp' }]);
         }
@@ -880,7 +881,10 @@ export async function handleReportCallback(
                 `Thông báo hiện tại:\n_${topic.custom_announcement || 'Chưa có thông báo tùy chỉnh'}_\n\n` +
                 `Vui lòng nhập nội dung thông báo mới (hoặc gửi /cancel để hủy):`;
 
-            bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).then(m => {
+            bot.sendMessage(chatId, text, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'rep_admin_edit_ann_cancel' }]] }
+            }).then(m => {
                 updateSession(userId, { state: 'editing_report_announcement', tempData: { topicId: topic.id, promptMessageId: m.message_id } });
             });
             bot.answerCallbackQuery(query.id);
@@ -916,11 +920,24 @@ export async function handleReportCallback(
                 `Thông báo hiện tại:\n_${topic.custom_announcement || 'Chưa có thông báo tùy chỉnh'}_\n\n` +
                 `Vui lòng nhập nội dung thông báo mới (hoặc gửi /cancel để hủy):`;
 
-            bot.sendMessage(chatId, text, { parse_mode: 'Markdown' }).then(m => {
+            bot.sendMessage(chatId, text, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'rep_admin_edit_ann_cancel' }]] }
+            }).then(m => {
                 updateSession(userId, { state: 'editing_report_announcement', tempData: { topicId: topicId, promptMessageId: m.message_id } });
             });
             bot.answerCallbackQuery(query.id);
         }
+        return true;
+    }
+
+    if (data === 'rep_admin_edit_ann_cancel') {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa thông báo.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Menu', callback_data: 'admin_reports' }]] }
+        });
+        clearSession(userId);
+        bot.answerCallbackQuery(query.id);
         return true;
     }
 

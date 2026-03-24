@@ -91,7 +91,7 @@ export async function handleCallbackQuery(query: TelegramBot.CallbackQuery) {
         [{ text: '🛠 Xem Công cụ', callback_data: 'tools_list' }],
         [
           { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
-          { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
+          { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_stats' }
         ],
         [
           { text: '💡 Tạo đề xuất', url: `https://t.me/${botUsername}?start=create_proposal` },

@@ -215,6 +215,9 @@ export async function handleMessage(msg: TelegramBot.Message) {
       // Handle deep links like /start create_regulation
       const param = text.split(' ')[1];
       if (param && command.startsWith('/start')) {
+        if (param.startsWith('edittool_')) {
+          if (await handleToolsDeepLink(bot, msg, param, userRole, session)) return;
+        }
         if (await handleRegulationDeepLink(bot, msg, param, userRole, session)) return;
         if (await handleAdminDeepLink(bot, msg, param, userRole)) return;
         if (await handleReportDeepLink(bot, msg, param, userRole)) return;
@@ -235,7 +238,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
           [{ text: '🛠 Xem Công cụ', callback_data: 'tools_list' }],
           [
             { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
-            { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
+            { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_stats' }
           ],
           [
             { text: '💡 Tạo đề xuất', url: `https://t.me/${botUsername}?start=create_proposal` },

@@ -227,7 +227,7 @@ export async function handleInfoCallback(
     }
 
     // Edit Personnel
-    if (data.startsWith('info_edit_')) {
+    if (data.startsWith('info_edit_') && !data.startsWith('info_edit_field_') && !data.startsWith('info_edit_cancel_')) {
         if (userRole !== 'admin') { bot.answerCallbackQuery(query.id, { text: '❌ Bạn không có quyền.', show_alert: true }); return true; }
         const profileId = data.split('_')[2];
 
@@ -236,10 +236,58 @@ export async function handleInfoCallback(
         const profile = res.rows[0];
 
         bot.deleteMessage(chatId, messageId).catch(() => { });
-        bot.sendMessage(chatId, `📝 Đang sửa thông tin: *${profile.full_name}*\n\nVui lòng nhập Họ và Tên mới:\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
-            .then(m => {
-                updateSession(userId, { state: 'editing_personnel_name', tempData: { profileId, profile, promptMessageId: m.message_id } });
+
+        const textMsg = `📝 **SỬA THÔNG TIN NHÂN SỰ**\n\n` +
+            `*Họ và Tên:* ${profile.full_name}\n` +
+            `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
+            `*Vị trí:* ${profile.position || 'Trống'}\n` +
+            `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+            `Vui lòng chọn phần muốn sửa:`;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '✏️ Sửa Họ và Tên', callback_data: `info_edit_field_name_${profileId}` }],
+                [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profileId}` }],
+                [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profileId}` }],
+                [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profileId}` }],
+                [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profileId}` }]
+            ]
+        };
+
+        bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('info_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[3];
+        const id = parts[4];
+        const session = getSession(userId) || { state: 'idle', tempData: {} };
+
+        let promptText = '';
+        let state = '';
+        if (field === 'name') { promptText = '📝 Vui lòng nhập *Họ và Tên* mới:'; state = 'editing_personnel_name'; }
+        if (field === 'birthday') { promptText = '🎂 Vui lòng nhập *Sinh nhật* mới (VD: 01/01/1990):'; state = 'editing_personnel_birthday'; }
+        if (field === 'position') { promptText = '💼 Vui lòng nhập *Vị trí/Chức vụ* mới:'; state = 'editing_personnel_position'; }
+        if (field === 'phone') { promptText = '📞 Vui lòng nhập *Số điện thoại* mới:'; state = 'editing_personnel_phone'; }
+
+        bot.sendMessage(chatId, promptText, { parse_mode: 'Markdown' }).then(m => {
+            updateSession(userId, {
+                state: state as any,
+                tempData: { ...(session.tempData || {}), profileId: parseInt(id), promptMessageId: m.message_id, viewMessageId: messageId }
             });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('info_edit_cancel_')) {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa thông tin nhân sự.').then(m => {
+            setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+        });
+        clearSession(userId);
         bot.answerCallbackQuery(query.id);
         return true;
     }
@@ -309,17 +357,24 @@ export async function handleInfoDeepLink(
         const res = await db.query('SELECT * FROM user_profiles WHERE id = $1', [profileId]);
         if (res.rows.length > 0) {
             const profile = res.rows[0];
-            bot.sendMessage(chatId, `📝 Đang sửa thông tin nhân sự: *${profile.full_name}*\n\nVui lòng nhập Họ và tên mới:\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
-                .then(m => {
-                    updateSession(userId, {
-                        state: 'editing_personnel_name',
-                        tempData: {
-                            profileId: profile.id,
-                            profile,
-                            promptMessageId: m.message_id
-                        }
-                    });
-                });
+            const textMsg = `📝 **SỬA THÔNG TIN NHÂN SỰ**\n\n` +
+                `*Họ và Tên:* ${profile.full_name}\n` +
+                `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
+                `*Vị trí:* ${profile.position || 'Trống'}\n` +
+                `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+                `Vui lòng chọn phần muốn sửa:`;
+
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '✏️ Sửa Họ và Tên', callback_data: `info_edit_field_name_${profileId}` }],
+                    [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profileId}` }],
+                    [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profileId}` }],
+                    [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profileId}` }],
+                    [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profileId}` }]
+                ]
+            };
+
+            bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
         } else {
             bot.sendMessage(chatId, '❌ Không tìm thấy thông tin nhân sự.');
         }
@@ -450,112 +505,95 @@ export async function handleInfoMessage(
 
     // EDITING FLOW
     if (state.startsWith('editing_personnel_')) {
-        if (!tempData.profile) {
+        if (!tempData.profileId) {
             bot.sendMessage(chatId, '❌ Phiên làm việc đã hết hạn hoặc bị lỗi. Vui lòng thử lại.');
             clearSession(userId);
             return true;
         }
     }
 
-    if (state === 'editing_personnel_name') {
+    if (state === 'editing_personnel_name' || state === 'editing_personnel_birthday' || state === 'editing_personnel_position' || state === 'editing_personnel_phone') {
         if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
         bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
-        if (text !== '/skip' && (text.length < 2 || text.length > 100)) {
-            bot.sendMessage(chatId, '⚠️ Họ và Tên phải từ 2 đến 100 ký tự. Vui lòng nhập lại:\n(/skip để bỏ qua, /cancel để hủy)', { parse_mode: 'Markdown' })
-                .then(m => {
+        let updateQuery = '';
+        let updateValue = text;
+
+        if (state === 'editing_personnel_name') {
+            if (text.length < 2 || text.length > 100) {
+                bot.sendMessage(chatId, '⚠️ Họ và Tên phải từ 2 đến 100 ký tự. Vui lòng nhập lại:').then(m => {
                     updateSession(userId, { state: 'editing_personnel_name', tempData: { ...tempData, promptMessageId: m.message_id } });
                 });
-            return true;
-        }
-
-        const newName = text === '/skip' ? tempData.profile.full_name : text;
-        tempData.profile.full_name = newName;
-
-        bot.sendMessage(chatId, `Họ và Tên: *${newName}*\n\nVui lòng nhập Sinh nhật mới (hiện tại: ${tempData.profile.birthday || 'Trống'}):\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
-            .then(m => {
-                updateSession(userId, { state: 'editing_personnel_birthday', tempData: { ...tempData, promptMessageId: m.message_id } });
-            });
-        return true;
-    }
-
-    if (state === 'editing_personnel_birthday') {
-        if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
-        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
-
-        if (text !== '/skip' && !/^(\d{2}\/\d{2}\/\d{4})$/.test(text)) {
-            bot.sendMessage(chatId, `⚠️ Sinh nhật không đúng định dạng. Vui lòng nhập lại (VD: 01/01/1990):\n(/skip để bỏ qua, /cancel để hủy, hiện tại: ${tempData.profile.birthday || 'Trống'})`, { parse_mode: 'Markdown' })
-                .then(m => {
+                return true;
+            }
+            updateQuery = 'UPDATE user_profiles SET full_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+        } else if (state === 'editing_personnel_birthday') {
+            if (!/^(\d{2}\/\d{2}\/\d{4})$/.test(text)) {
+                bot.sendMessage(chatId, '⚠️ Sinh nhật không đúng định dạng. Vui lòng nhập lại (VD: 01/01/1990):').then(m => {
                     updateSession(userId, { state: 'editing_personnel_birthday', tempData: { ...tempData, promptMessageId: m.message_id } });
                 });
-            return true;
-        }
-
-        const newBirthday = text === '/skip' ? tempData.profile.birthday : text;
-        tempData.profile.birthday = newBirthday;
-
-        bot.sendMessage(chatId, `Sinh nhật: *${newBirthday || 'Trống'}*\n\nVui lòng nhập Vị trí mới (hiện tại: ${tempData.profile.position || 'Trống'}):\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
-            .then(m => {
-                updateSession(userId, { state: 'editing_personnel_position', tempData: { ...tempData, promptMessageId: m.message_id } });
-            });
-        return true;
-    }
-
-    if (state === 'editing_personnel_position') {
-        if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
-        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
-
-        if (text !== '/skip' && text.length > 100) {
-            bot.sendMessage(chatId, `⚠️ Vị trí/Chức vụ không được vượt quá 100 ký tự. Vui lòng nhập lại:\n(/skip để bỏ qua, /cancel để hủy, hiện tại: ${tempData.profile.position || 'Trống'})`, { parse_mode: 'Markdown' })
-                .then(m => {
+                return true;
+            }
+            updateQuery = 'UPDATE user_profiles SET birthday = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+        } else if (state === 'editing_personnel_position') {
+            if (text.length > 100) {
+                bot.sendMessage(chatId, '⚠️ Vị trí/Chức vụ không được vượt quá 100 ký tự. Vui lòng nhập lại:').then(m => {
                     updateSession(userId, { state: 'editing_personnel_position', tempData: { ...tempData, promptMessageId: m.message_id } });
                 });
-            return true;
-        }
-
-        const newPosition = text === '/skip' ? tempData.profile.position : text;
-        tempData.profile.position = newPosition;
-
-        bot.sendMessage(chatId, `Vị trí: *${newPosition || 'Trống'}*\n\nVui lòng nhập Số điện thoại mới (hiện tại: ${tempData.profile.phone || 'Trống'}):\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
-            .then(m => {
-                updateSession(userId, { state: 'editing_personnel_phone', tempData: { ...tempData, promptMessageId: m.message_id } });
-            });
-        return true;
-    }
-
-    if (state === 'editing_personnel_phone') {
-        if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
-        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
-
-        if (text !== '/skip' && !/^(\+?\d{9,15})$/.test(text.replace(/\s+/g, ''))) {
-            bot.sendMessage(chatId, `⚠️ Số điện thoại không hợp lệ. Vui lòng nhập lại:\n(/skip để bỏ qua, /cancel để hủy, hiện tại: ${tempData.profile.phone || 'Trống'})`, { parse_mode: 'Markdown' })
-                .then(m => {
+                return true;
+            }
+            updateQuery = 'UPDATE user_profiles SET position = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+        } else if (state === 'editing_personnel_phone') {
+            if (!/^(\+?\d{9,15})$/.test(text.replace(/\s+/g, ''))) {
+                bot.sendMessage(chatId, '⚠️ Số điện thoại không hợp lệ. Vui lòng nhập lại:', {
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `info_edit_cancel_${tempData.profileId}` }]] }
+                }).then(m => {
                     updateSession(userId, { state: 'editing_personnel_phone', tempData: { ...tempData, promptMessageId: m.message_id } });
                 });
-            return true;
+                return true;
+            }
+            updateQuery = 'UPDATE user_profiles SET phone = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
         }
 
-        const newPhone = text === '/skip' ? tempData.profile.phone : text;
-        tempData.profile.phone = newPhone;
-
-        // Save to DB
         try {
-            await db.query(
-                'UPDATE user_profiles SET full_name = $1, birthday = $2, position = $3, phone = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5',
-                [tempData.profile.full_name, tempData.profile.birthday, tempData.profile.position, tempData.profile.phone, tempData.profileId]
-            );
+            await db.query(updateQuery, [updateValue, tempData.profileId]);
 
-            bot.sendMessage(chatId, '✅ Đã cập nhật thông tin nhân sự thành công!', {
-                reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Quản lý Nhân sự', callback_data: 'admin_manage_personnel' }]] }
+            bot.sendMessage(chatId, '✅ Đã cập nhật thông tin nhân sự thành công!').then(m => {
+                setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 3000);
             });
-            clearSession(userId);
+
+            if (tempData.viewMessageId) bot.deleteMessage(chatId, tempData.viewMessageId).catch(() => { });
+
+            const res = await db.query('SELECT * FROM user_profiles WHERE id = $1', [tempData.profileId]);
+            if (res.rows.length > 0) {
+                const profile = res.rows[0];
+                const textMsg = `📝 **SỬA THÔNG TIN NHÂN SỰ**\n\n` +
+                    `*Họ và Tên:* ${profile.full_name}\n` +
+                    `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
+                    `*Vị trí:* ${profile.position || 'Trống'}\n` +
+                    `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+                    `Vui lòng chọn phần muốn sửa:`;
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: '✏️ Sửa Họ và Tên', callback_data: `info_edit_field_name_${profile.id}` }],
+                        [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profile.id}` }],
+                        [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profile.id}` }],
+                        [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profile.id}` }],
+                        [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profile.id}` }]
+                    ]
+                };
+
+                bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
+            }
+
             refreshAllInfoTopics(bot);
             broadcastPersonnelUpdate(bot);
         } catch (err) {
             console.error(err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi lưu dữ liệu.');
-            clearSession(userId);
         }
+        clearSession(userId);
         return true;
     }
 

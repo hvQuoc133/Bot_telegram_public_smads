@@ -9,6 +9,8 @@ export type UserState =
   | 'creating_regulation_step_2'
   | 'editing_regulation_step_1'
   | 'editing_regulation_step_2'
+  | 'editing_regulation_title'
+  | 'editing_regulation_content'
   | 'creating_report_step_title'
   | 'creating_report_step_content'
   | 'creating_report_step_attachments'
@@ -39,6 +41,13 @@ export type UserState =
   | 'editing_announcement_step_4'
   | 'editing_announcement_step_5_options'
   | 'editing_announcement_step_5'
+  | 'editing_announcement_title'
+  | 'editing_announcement_content'
+  | 'editing_announcement_file'
+  | 'editing_announcement_type'
+  | 'editing_announcement_options'
+  | 'editing_announcement_time'
+  | 'editing_announcement_time_end'
   | 'adding_tool_category_name'
   | 'adding_tool_category_desc'
   | 'editing_tool_category_name'
@@ -54,6 +63,10 @@ export type UserState =
   | 'creating_proposal_time'
   | 'creating_proposal_cost'
   | 'creating_proposal_file'
+  | 'editing_proposal_content'
+  | 'editing_proposal_time'
+  | 'editing_proposal_cost'
+  | 'editing_proposal_file'
   | 'rejecting_proposal';
 
 export interface SessionData {

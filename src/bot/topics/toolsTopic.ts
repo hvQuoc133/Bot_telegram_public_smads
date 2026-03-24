@@ -1,6 +1,6 @@
 import TelegramBot, { InlineKeyboardButton } from 'node-telegram-bot-api';
 import { db } from '../../db';
-import { SessionData, updateSession, clearSession } from '../services/sessionManager';
+import { SessionData, updateSession, clearSession, getSession } from '../services/sessionManager';
 import { botUsername } from '../botInstance';
 import { sendToolsDashboard } from './topicManager';
 
@@ -71,6 +71,48 @@ export async function handleToolsDeepLink(
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
         });
+        return true;
+    }
+
+    if (param.startsWith('edittool_')) {
+        const toolId = parseInt(param.replace('edittool_', ''));
+        try {
+            const toolRes = await db.query('SELECT * FROM tools WHERE id = $1', [toolId]);
+            if (toolRes.rows.length > 0) {
+                const tool = toolRes.rows[0];
+                if (userRole === 'admin' || tool.created_by === userId) {
+                    updateSession(userId, { state: 'editing_tool_name', tempData: { toolId: tool.id, oldName: tool.name, oldDesc: tool.description, oldLink: tool.link, oldFileId: tool.file_id, oldFileType: tool.file_type } });
+
+                    let currentLinkOrFile = 'Không có';
+                    if (tool.link) currentLinkOrFile = `Link: ${tool.link}`;
+                    else if (tool.file_id) currentLinkOrFile = `Tệp đính kèm (${tool.file_type})`;
+
+                    const text = `✏️ **SỬA CÔNG CỤ**\n\n` +
+                        `*Tên:* ${tool.name}\n` +
+                        `*Mô tả:* ${tool.description || 'Không có'}\n` +
+                        `*Đính kèm:* ${currentLinkOrFile}\n\n` +
+                        `Vui lòng chọn phần muốn sửa:`;
+
+                    const keyboard = {
+                        inline_keyboard: [
+                            [{ text: '✏️ Sửa Tên', callback_data: `tools_edit_field_name_${toolId}` }],
+                            [{ text: '✏️ Sửa Mô tả', callback_data: `tools_edit_field_desc_${toolId}` }],
+                            [{ text: '✏️ Sửa Link/Tệp', callback_data: `tools_edit_field_link_${toolId}` }],
+                            [{ text: '❌ Hủy', callback_data: `tools_edit_cancel_${toolId}` }]
+                        ]
+                    };
+
+                    bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+                } else {
+                    bot.sendMessage(chatId, '❌ Bạn không có quyền sửa công cụ này.');
+                }
+            } else {
+                bot.sendMessage(chatId, '❌ Không tìm thấy công cụ.');
+            }
+        } catch (err) {
+            console.error('Error starting edit tool via deep link:', err);
+            bot.sendMessage(chatId, '❌ Có lỗi xảy ra.');
+        }
         return true;
     }
 
@@ -150,7 +192,9 @@ export async function handleToolsState(
             } else if (text) {
                 link = text;
             } else {
-                bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ, hoặc gõ /skip.');
+                bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ, hoặc gõ /skip.', {
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
+                });
                 return true;
             }
         }
@@ -171,26 +215,40 @@ export async function handleToolsState(
         return true;
     }
 
-    if (session.state === 'editing_tool_category_name') {
-        const newName = command === '/skip' ? session.tempData.oldName : text;
-        updateSession(userId, { state: 'editing_tool_category_desc', tempData: { ...session.tempData, name: newName } });
-        bot.sendMessage(chatId, `Tên danh mục: *${newName}*\n\nMô tả hiện tại: ${session.tempData.oldDesc || 'Không có'}\n\nVui lòng nhập mô tả mới (hoặc gõ /skip để giữ nguyên):`, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
-        });
-        return true;
-    }
-
-    if (session.state === 'editing_tool_category_desc') {
-        const newDesc = command === '/skip' ? session.tempData.oldDesc : text;
-        const { categoryId, name } = session.tempData;
+    if (session.state === 'editing_tool_category_name' || session.state === 'editing_tool_category_desc') {
+        const { categoryId, promptMessageId, viewMessageId } = session.tempData;
 
         try {
-            await db.query(
-                'UPDATE tool_categories SET name = $1, description = $2 WHERE id = $3',
-                [name, newDesc, categoryId]
-            );
-            bot.sendMessage(chatId, `✅ Đã cập nhật danh mục công cụ: *${name}*`, { parse_mode: 'Markdown' });
+            if (session.state === 'editing_tool_category_name') {
+                await db.query('UPDATE tool_categories SET name = $1 WHERE id = $2', [text, categoryId]);
+            } else {
+                await db.query('UPDATE tool_categories SET description = $1 WHERE id = $2', [text, categoryId]);
+            }
+
+            bot.sendMessage(chatId, `✅ Đã cập nhật danh mục công cụ.`).then(m => {
+                setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 3000);
+            });
+
+            if (promptMessageId) bot.deleteMessage(chatId, promptMessageId).catch(() => { });
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+            if (viewMessageId) bot.deleteMessage(chatId, viewMessageId).catch(() => { });
+
+            const catRes = await db.query('SELECT name, description FROM tool_categories WHERE id = $1', [categoryId]);
+            if (catRes.rows.length > 0) {
+                const textMsg = `✏️ **SỬA DANH MỤC CÔNG CỤ**\n\n` +
+                    `*Tên:* ${catRes.rows[0].name}\n` +
+                    `*Mô tả:* ${catRes.rows[0].description || 'Không có'}\n\n` +
+                    `Vui lòng chọn phần muốn sửa:`;
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: '✏️ Sửa Tên', callback_data: `tools_cat_edit_field_name_${categoryId}` }],
+                        [{ text: '✏️ Sửa Mô tả', callback_data: `tools_cat_edit_field_desc_${categoryId}` }],
+                        [{ text: '❌ Hủy', callback_data: `tools_cat_edit_cancel_${categoryId}` }]
+                    ]
+                };
+                bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
+            }
         } catch (err) {
             console.error('Error updating tool category:', err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật danh mục.');
@@ -199,63 +257,69 @@ export async function handleToolsState(
         return true;
     }
 
-    if (session.state === 'editing_tool_name') {
-        const newName = command === '/skip' ? session.tempData.oldName : text;
-        updateSession(userId, { state: 'editing_tool_desc', tempData: { ...session.tempData, name: newName } });
-        bot.sendMessage(chatId, `Tên công cụ: *${newName}*\n\nMô tả hiện tại: ${session.tempData.oldDesc || 'Không có'}\n\nVui lòng nhập mô tả mới (hoặc gõ /skip để giữ nguyên):`, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
-        });
-        return true;
-    }
-
-    if (session.state === 'editing_tool_desc') {
-        const newDesc = command === '/skip' ? session.tempData.oldDesc : text;
-        updateSession(userId, { state: 'editing_tool_link_or_file', tempData: { ...session.tempData, description: newDesc } });
-
-        let currentLinkOrFile = 'Không có';
-        if (session.tempData.oldLink) currentLinkOrFile = `Link: ${session.tempData.oldLink}`;
-        else if (session.tempData.oldFileId) currentLinkOrFile = `Tệp đính kèm (${session.tempData.oldFileType})`;
-
-        bot.sendMessage(chatId, `Mô tả đã được lưu.\n\nHiện tại: ${currentLinkOrFile}\n\nVui lòng gửi link (URL) hoặc đính kèm tệp mới cho công cụ này (hoặc gõ /skip để giữ nguyên):`, {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
-        });
-        return true;
-    }
-
-    if (session.state === 'editing_tool_link_or_file') {
-        let link = session.tempData.oldLink;
-        let fileId = session.tempData.oldFileId;
-        let fileType = session.tempData.oldFileType;
-
-        if (command !== '/skip') {
-            if (msg.document) {
-                fileId = msg.document.file_id;
-                fileType = 'document';
-                link = null;
-            } else if (msg.photo && msg.photo.length > 0) {
-                fileId = msg.photo[msg.photo.length - 1].file_id;
-                fileType = 'photo';
-                link = null;
-            } else if (text) {
-                link = text;
-                fileId = null;
-                fileType = null;
-            } else {
-                bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ, hoặc gõ /skip.');
-                return true;
-            }
-        }
-
-        const { toolId, name, description } = session.tempData;
+    if (session.state === 'editing_tool_name' || session.state === 'editing_tool_desc' || session.state === 'editing_tool_link_or_file') {
+        const { toolId, promptMessageId, viewMessageId } = session.tempData;
 
         try {
-            await db.query(
-                'UPDATE tools SET name = $1, description = $2, link = $3, file_id = $4, file_type = $5 WHERE id = $6',
-                [name, description, link, fileId, fileType, toolId]
-            );
-            bot.sendMessage(chatId, `✅ Đã cập nhật công cụ: *${name}*`, { parse_mode: 'Markdown' });
+            if (session.state === 'editing_tool_name') {
+                await db.query('UPDATE tools SET name = $1 WHERE id = $2', [text, toolId]);
+            } else if (session.state === 'editing_tool_desc') {
+                await db.query('UPDATE tools SET description = $1 WHERE id = $2', [text, toolId]);
+            } else if (session.state === 'editing_tool_link_or_file') {
+                let link = null;
+                let fileId = null;
+                let fileType = null;
+
+                if (msg.document) {
+                    fileId = msg.document.file_id;
+                    fileType = 'document';
+                } else if (msg.photo && msg.photo.length > 0) {
+                    fileId = msg.photo[msg.photo.length - 1].file_id;
+                    fileType = 'photo';
+                } else if (text) {
+                    link = text;
+                } else {
+                    bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ.', {
+                        reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `tools_edit_cancel_${toolId}` }]] }
+                    }).then(m => {
+                        updateSession(userId, { state: session.state, tempData: { ...session.tempData, promptMessageId: m.message_id } });
+                    });
+                    return true;
+                }
+                await db.query('UPDATE tools SET link = $1, file_id = $2, file_type = $3 WHERE id = $4', [link, fileId, fileType, toolId]);
+            }
+
+            bot.sendMessage(chatId, `✅ Đã cập nhật công cụ.`).then(m => {
+                setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 3000);
+            });
+
+            if (promptMessageId) bot.deleteMessage(chatId, promptMessageId).catch(() => { });
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+            if (viewMessageId) bot.deleteMessage(chatId, viewMessageId).catch(() => { });
+
+            const toolRes = await db.query('SELECT * FROM tools WHERE id = $1', [toolId]);
+            if (toolRes.rows.length > 0) {
+                const tool = toolRes.rows[0];
+                let currentLinkOrFile = 'Không có';
+                if (tool.link) currentLinkOrFile = `Link: ${tool.link}`;
+                else if (tool.file_id) currentLinkOrFile = `Tệp đính kèm (${tool.file_type})`;
+
+                const textMsg = `✏️ **SỬA CÔNG CỤ**\n\n` +
+                    `*Tên:* ${tool.name}\n` +
+                    `*Mô tả:* ${tool.description || 'Không có'}\n` +
+                    `*Đính kèm:* ${currentLinkOrFile}\n\n` +
+                    `Vui lòng chọn phần muốn sửa:`;
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: '✏️ Sửa Tên', callback_data: `tools_edit_field_name_${toolId}` }],
+                        [{ text: '✏️ Sửa Mô tả', callback_data: `tools_edit_field_desc_${toolId}` }],
+                        [{ text: '✏️ Sửa Link/Tệp', callback_data: `tools_edit_field_link_${toolId}` }],
+                        [{ text: '❌ Hủy', callback_data: `tools_edit_cancel_${toolId}` }]
+                    ]
+                };
+                bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
+            }
         } catch (err) {
             console.error('Error updating tool:', err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật công cụ.');
@@ -358,6 +422,12 @@ export async function handleToolsCallback(
         return true;
     }
 
+    if (data === 'tools_close_temp') {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
     if (data.startsWith('tools_view_')) {
         const toolId = parseInt(data.replace('tools_view_', ''));
         await sendToolDetails(bot, chatId, toolId, userRole, userId, messageId, replyOptions);
@@ -403,7 +473,7 @@ export async function handleToolsCallback(
         return true;
     }
 
-    if (data.startsWith('tools_cat_edit_')) {
+    if (data.startsWith('tools_cat_edit_') && !data.startsWith('tools_cat_edit_field_') && !data.startsWith('tools_cat_edit_cancel_')) {
         if (userRole !== 'admin') {
             bot.answerCallbackQuery(query.id, { text: '❌ Chỉ Admin mới có quyền.', show_alert: true });
             return true;
@@ -414,10 +484,21 @@ export async function handleToolsCallback(
             const catRes = await db.query('SELECT name, description FROM tool_categories WHERE id = $1', [catId]);
             if (catRes.rows.length > 0) {
                 updateSession(userId, { state: 'editing_tool_category_name', tempData: { categoryId: catId, oldName: catRes.rows[0].name, oldDesc: catRes.rows[0].description } });
-                bot.sendMessage(chatId, `✏️ **SỬA DANH MỤC CÔNG CỤ**\n\nTên hiện tại: *${catRes.rows[0].name}*\n\nVui lòng nhập tên mới (hoặc gõ /skip để giữ nguyên):`, {
-                    parse_mode: 'Markdown',
-                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
-                });
+
+                const text = `✏️ **SỬA DANH MỤC CÔNG CỤ**\n\n` +
+                    `*Tên:* ${catRes.rows[0].name}\n` +
+                    `*Mô tả:* ${catRes.rows[0].description || 'Không có'}\n\n` +
+                    `Vui lòng chọn phần muốn sửa:`;
+
+                const keyboard = {
+                    inline_keyboard: [
+                        [{ text: '✏️ Sửa Tên', callback_data: `tools_cat_edit_field_name_${catId}` }],
+                        [{ text: '✏️ Sửa Mô tả', callback_data: `tools_cat_edit_field_desc_${catId}` }],
+                        [{ text: '❌ Hủy', callback_data: `tools_cat_edit_cancel_${catId}` }]
+                    ]
+                };
+
+                bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
             }
         } catch (err) {
             console.error('Error starting edit tool category:', err);
@@ -427,8 +508,46 @@ export async function handleToolsCallback(
         return true;
     }
 
-    if (data.startsWith('tools_edit_')) {
+    if (data.startsWith('tools_cat_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[4];
+        const id = parts[5];
+        const session = getSession(userId);
+
+        let promptText = '';
+        if (field === 'name') promptText = '📝 Vui lòng nhập *Tên* mới cho Danh mục:';
+        if (field === 'desc') promptText = '📄 Vui lòng nhập *Mô tả* mới cho Danh mục:';
+
+        bot.sendMessage(chatId, promptText, { parse_mode: 'Markdown' }).then(m => {
+            updateSession(userId, {
+                state: `editing_tool_category_${field}` as any,
+                tempData: { ...session.tempData, categoryId: parseInt(id), promptMessageId: m.message_id, viewMessageId: messageId }
+            });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('tools_cat_edit_cancel_')) {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa danh mục.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Menu', callback_data: 'tools_dashboard' }]] }
+        });
+        clearSession(userId);
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('tools_edit_') && !data.startsWith('tools_edit_field_') && !data.startsWith('tools_edit_cancel_')) {
         const toolId = parseInt(data.replace('tools_edit_', ''));
+
+        const isPrivate = query.message?.chat.type === 'private';
+        if (!isPrivate) {
+            const deepLink = botUsername ? `https://t.me/${botUsername}?start=edittool_${toolId}` : 'https://t.me/your_bot';
+            bot.answerCallbackQuery(query.id, { text: '⚙️ Vui lòng chuyển sang Inbox bot để sửa.', show_alert: true, url: deepLink });
+            return true;
+        }
+
         bot.deleteMessage(chatId, messageId).catch(() => { });
         try {
             const toolRes = await db.query('SELECT * FROM tools WHERE id = $1', [toolId]);
@@ -436,10 +555,27 @@ export async function handleToolsCallback(
                 const tool = toolRes.rows[0];
                 if (userRole === 'admin' || tool.created_by === userId) {
                     updateSession(userId, { state: 'editing_tool_name', tempData: { toolId: tool.id, oldName: tool.name, oldDesc: tool.description, oldLink: tool.link, oldFileId: tool.file_id, oldFileType: tool.file_type } });
-                    bot.sendMessage(chatId, `✏️ **SỬA CÔNG CỤ**\n\nTên hiện tại: *${tool.name}*\n\nVui lòng nhập tên mới (hoặc gõ /skip để giữ nguyên):`, {
-                        parse_mode: 'Markdown',
-                        reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
-                    });
+
+                    let currentLinkOrFile = 'Không có';
+                    if (tool.link) currentLinkOrFile = `Link: ${tool.link}`;
+                    else if (tool.file_id) currentLinkOrFile = `Tệp đính kèm (${tool.file_type})`;
+
+                    const text = `✏️ **SỬA CÔNG CỤ**\n\n` +
+                        `*Tên:* ${tool.name}\n` +
+                        `*Mô tả:* ${tool.description || 'Không có'}\n` +
+                        `*Đính kèm:* ${currentLinkOrFile}\n\n` +
+                        `Vui lòng chọn phần muốn sửa:`;
+
+                    const keyboard = {
+                        inline_keyboard: [
+                            [{ text: '✏️ Sửa Tên', callback_data: `tools_edit_field_name_${toolId}` }],
+                            [{ text: '✏️ Sửa Mô tả', callback_data: `tools_edit_field_desc_${toolId}` }],
+                            [{ text: '✏️ Sửa Link/Tệp', callback_data: `tools_edit_field_link_${toolId}` }],
+                            [{ text: '❌ Hủy', callback_data: `tools_edit_cancel_${toolId}` }]
+                        ]
+                    };
+
+                    bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
                 } else {
                     bot.answerCallbackQuery(query.id, { text: '❌ Bạn không có quyền sửa công cụ này.', show_alert: true });
                     return true;
@@ -449,6 +585,38 @@ export async function handleToolsCallback(
             console.error('Error starting edit tool:', err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra.');
         }
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('tools_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[3];
+        const id = parts[4];
+        const session = getSession(userId);
+
+        let promptText = '';
+        let state = '';
+        if (field === 'name') { promptText = '📝 Vui lòng nhập *Tên* mới cho Công cụ:'; state = 'editing_tool_name'; }
+        if (field === 'desc') { promptText = '📄 Vui lòng nhập *Mô tả* mới cho Công cụ:'; state = 'editing_tool_desc'; }
+        if (field === 'link') { promptText = '🔗 Vui lòng gửi *Link (URL)* hoặc đính kèm *Tệp* mới cho Công cụ:'; state = 'editing_tool_link_or_file'; }
+
+        bot.sendMessage(chatId, promptText, { parse_mode: 'Markdown' }).then(m => {
+            updateSession(userId, {
+                state: state as any,
+                tempData: { ...session.tempData, toolId: parseInt(id), promptMessageId: m.message_id, viewMessageId: messageId }
+            });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data.startsWith('tools_edit_cancel_')) {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa công cụ.').then(m => {
+            setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+        });
+        clearSession(userId);
         bot.answerCallbackQuery(query.id);
         return true;
     }
@@ -484,9 +652,9 @@ async function sendToolsList(bot: TelegramBot, chatId: number, messageId?: numbe
         const keyboard: InlineKeyboardButton[][] = cats.rows.map(c => [{ text: `📁 ${c.name}`, callback_data: `tools_cat_view_${c.id}` }]);
 
         if (chatId > 0) {
-            keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'user_dashboard' }]);
+            keyboard.push([{ text: 'Đóng', callback_data: 'user_dashboard' }]);
         } else {
-            keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'tools_dashboard' }]);
+            keyboard.push([{ text: 'Đóng', callback_data: 'tools_dashboard' }]);
         }
 
         let sentMsg: TelegramBot.Message | undefined;
@@ -666,6 +834,7 @@ async function sendToolDetails(bot: TelegramBot, chatId: number, toolId: number,
                 { text: '🔙 Quay lại Danh mục', callback_data: `tools_cat_view_${tool.category_id}` },
                 { text: '🔙 Menu Chính', callback_data: 'tools_list' }
             ]);
+            keyboard.push([{ text: '🗑 Đóng', callback_data: 'tools_close_temp' }]);
         } else {
             keyboard.push([{ text: '🔙 Quay lại Danh mục', callback_data: `tools_cat_view_${tool.category_id}` }]);
         }
@@ -727,9 +896,9 @@ async function sendToolDetails(bot: TelegramBot, chatId: number, toolId: number,
         if (chatId < 0) {
             const msgId = sentMsg?.message_id || messageId;
             if (msgId) {
-                setAutoBackTimeout(msgId, () => {
+                setTimeout(() => {
                     bot.deleteMessage(chatId, msgId).catch(() => { });
-                });
+                }, 15000);
             }
         }
 

@@ -238,10 +238,17 @@ export async function handleRegulationDeepLink(
             return true;
         }
         await db.query('UPDATE regulations SET locked_by = $1, locked_at = NOW() WHERE id = $2', [userId, regId]);
-        bot.sendMessage(chatId, `📝 Đang sửa nội quy: *${reg.title}*\n\nVui lòng nhập tiêu đề mới cho Nội quy:\n(/skip để bỏ qua, /cancel để hủy)`, { parse_mode: 'Markdown' })
+
+        const text = `📝 *Đang sửa nội quy:*\n\n*Tiêu đề:* ${reg.title}\n*Nội dung:* ${reg.content.substring(0, 100)}...`;
+        const keyboard = [
+            [{ text: '📝 Sửa Tiêu đề', callback_data: `reg_edit_field_title_${regId}` }],
+            [{ text: '📄 Sửa Nội dung', callback_data: `reg_edit_field_content_${regId}` }],
+            [{ text: '🔙 Hủy', callback_data: `reg_edit_cancel_${regId}` }]
+        ];
+
+        bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } })
             .then(m => {
-                updateSession(userId, { state: 'editing_regulation_step_1', tempData: { regId, sourceChatId, sourceMessageId, oldTitle: reg.title, oldContent: reg.content, promptMessageId: m.message_id } });
-                setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 60000);
+                updateSession(userId, { state: 'idle', tempData: { regId, sourceChatId, sourceMessageId, oldTitle: reg.title, oldContent: reg.content, promptMessageId: m.message_id } });
             });
         return true;
     } else if (param.startsWith('deletereg_') && userRole === 'admin') {
@@ -255,7 +262,7 @@ export async function handleRegulationDeepLink(
             [{ text: '✅ Có, Xóa', callback_data: `reg_confirm_delete_${regId}` }],
             [{ text: '❌ Hủy', callback_data: 'reg_back' }]
         ];
-        bot.sendMessage(chatId, `⚠️ Bạn có chắc chắn muốn xóa nội quy  này không?`, { reply_markup: { inline_keyboard: keyboard } })
+        bot.sendMessage(chatId, '⚠️ Bạn có chắc chắn muốn xóa nội quy này không?', { reply_markup: { inline_keyboard: keyboard } })
             .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 60000));
         return true;
     }
@@ -314,38 +321,57 @@ export async function handleRegulationState(
                 .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
             await refreshAllRegulationTopics(bot);
             await broadcastRegulationUpdate(bot);
-            await handleAdminDashboard(bot, chatId, userRole);
             return true;
-        case 'editing_regulation_step_1':
+        case 'editing_regulation_title':
+        case 'editing_regulation_content': {
             if (session.tempData?.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
-            const newTitle = command === '/skip' ? session.tempData.oldTitle : text;
-            bot.sendMessage(chatId, `✍️ Vui lòng nhập nội dung mới cho Nội quy:\n\n(Nội dung hiện tại: ${session.tempData.oldContent.substring(0, 100)}...)\n(/cancel để hủy)`)
-                .then(m => {
-                    updateSession(userId, { state: 'editing_regulation_step_2', tempData: { ...session.tempData, newTitle, promptMessageId: m.message_id } });
-                    setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 30000);
-                });
-            return true;
-        case 'editing_regulation_step_2':
-            if (session.tempData?.promptMessageId) bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
+            bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+
             const regId = session.tempData.regId;
-            const finalTitle = session.tempData.newTitle;
-            const newContent = command === '/skip' ? session.tempData.oldContent : text;
-            const sourceChatId = session.tempData.sourceChatId;
-            const sourceMessageId = session.tempData.sourceMessageId;
+            const field = session.state.replace('editing_regulation_', '');
 
-            await db.query('UPDATE regulations SET title = $1, content = $2, locked_by = NULL, locked_at = NULL WHERE id = $3', [finalTitle, newContent, regId]);
-            clearSession(userId);
-            await bot.sendMessage(chatId, '✅ Cập nhật Nội quy thành công!')
-                .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
-            await refreshAllRegulationTopics(bot);
-            await broadcastRegulationUpdate(bot);
-            await handleAdminDashboard(bot, chatId, userRole);
+            try {
+                let updateQuery = '';
+                let updateParams: any[] = [];
 
-            if (sourceChatId && sourceMessageId) {
-                bot.deleteMessage(sourceChatId, sourceMessageId).catch(() => { });
+                if (field === 'title') {
+                    updateQuery = 'UPDATE regulations SET title = $1, locked_by = NULL, locked_at = NULL WHERE id = $2';
+                    updateParams = [text, regId];
+                } else if (field === 'content') {
+                    updateQuery = 'UPDATE regulations SET content = $1, locked_by = NULL, locked_at = NULL WHERE id = $2';
+                    updateParams = [text, regId];
+                }
+
+                await db.query(updateQuery, updateParams);
+
+                bot.sendMessage(chatId, '✅ Đã cập nhật nội quy thành công!').then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+
+                await refreshAllRegulationTopics(bot);
+                await broadcastRegulationUpdate(bot);
+
+                const sourceChatId = session.tempData.sourceChatId;
+                const sourceMessageId = session.tempData.sourceMessageId;
+                if (sourceChatId && sourceMessageId) {
+                    bot.deleteMessage(sourceChatId, sourceMessageId).catch(() => { });
+                }
+
+                if (session.tempData.viewMessageId) {
+                    const fakeQuery = {
+                        id: 'fake',
+                        from: msg.from,
+                        message: { chat: { id: chatId }, message_id: session.tempData.viewMessageId }
+                    } as TelegramBot.CallbackQuery;
+                    await handleRegulationCallback(bot, fakeQuery, `reg_view_${regId}`, 'admin', session);
+                }
+
+            } catch (err) {
+                console.error('Error updating regulation:', err);
+                bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi cập nhật nội quy.');
             }
 
+            clearSession(userId);
             return true;
+        }
     }
 
     return false;
@@ -469,6 +495,33 @@ export async function handleRegulationCallback(
             });
         bot.answerCallbackQuery(query.id);
         return true;
+    } else if (data.startsWith('reg_edit_field_')) {
+        const parts = data.split('_');
+        const field = parts[3];
+        const regId = parts[4];
+
+        let promptText = '';
+        if (field === 'title') promptText = '📝 Vui lòng nhập *Tiêu đề* mới cho Nội quy:';
+        if (field === 'content') promptText = '📄 Vui lòng nhập *Nội dung* mới cho Nội quy:';
+
+        bot.sendMessage(chatId, promptText, { parse_mode: 'Markdown' }).then(m => {
+            updateSession(userId, {
+                state: `editing_regulation_${field}` as any,
+                tempData: { ...session.tempData, regId, promptMessageId: m.message_id, viewMessageId: messageId }
+            });
+        });
+        bot.answerCallbackQuery(query.id);
+        return true;
+    } else if (data.startsWith('reg_edit_cancel_')) {
+        const regId = data.split('_')[3];
+        await db.query('UPDATE regulations SET locked_by = NULL, locked_at = NULL WHERE id = $1', [regId]);
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa nội quy.').then(m => {
+            setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+        });
+        clearSession(userId);
+        bot.answerCallbackQuery(query.id);
+        return true;
     } else if (data.startsWith('reg_edit_')) {
         const regId = data.split('_')[2];
 
@@ -501,10 +554,16 @@ export async function handleRegulationCallback(
 
         await db.query('UPDATE regulations SET locked_by = $1, locked_at = NOW() WHERE id = $2', [userId, regId]);
 
-        bot.sendMessage(userId, `📝 Đang sửa nội quy: *${reg.title}*\n\nVui lòng nhập tiêu đề mới cho Nội quy:`, { parse_mode: 'Markdown' })
+        const text = `📝 *Đang sửa nội quy:*\n\n*Tiêu đề:* ${reg.title}\n*Nội dung:* ${reg.content.substring(0, 100)}...`;
+        const keyboard = [
+            [{ text: '📝 Sửa Tiêu đề', callback_data: `reg_edit_field_title_${regId}` }],
+            [{ text: '📄 Sửa Nội dung', callback_data: `reg_edit_field_content_${regId}` }],
+            [{ text: '🔙 Hủy', callback_data: `reg_edit_cancel_${regId}` }]
+        ];
+
+        bot.sendMessage(userId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } })
             .then(m => {
-                updateSession(userId, { state: 'editing_regulation_step_1', tempData: { regId, oldTitle: reg.title, oldContent: reg.content, promptMessageId: m.message_id } });
-                setTimeout(() => bot.deleteMessage(userId, m.message_id).catch(() => { }), 60000);
+                updateSession(userId, { state: 'idle', tempData: { regId, oldTitle: reg.title, oldContent: reg.content, promptMessageId: m.message_id } });
             });
         bot.answerCallbackQuery(query.id);
         return true;
@@ -555,7 +614,6 @@ export async function handleRegulationCallback(
 
         // Go back to dashboard
         bot.deleteMessage(chatId, messageId).catch(() => { });
-        await handleAdminDashboard(bot, chatId, userRole);
         return true;
     }
 
