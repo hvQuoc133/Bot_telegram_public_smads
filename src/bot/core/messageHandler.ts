@@ -11,6 +11,7 @@ import { handleInfoMessage, handleInfoDeepLink } from '../topics/infoTopic';
 import { handleAnnouncementDeepLink, handleAnnouncementState } from '../topics/announcementTopic';
 import { handleToolsDeepLink, handleToolsState, handleToolsCommand } from '../topics/toolsTopic';
 import { handleProposalDeepLink, handleProposalState } from '../topics/proposalTopic';
+import { handleDocumentMessage } from '../topics/documentTopic';
 
 const commandCache = new Map<string, number>();
 const COMMAND_COOLDOWN = 15000; // 15 seconds
@@ -236,6 +237,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
           [{ text: '📇 Xem Thông tin Nhân sự', callback_data: 'info_list' }],
           [{ text: '📢 Xem Thông báo', callback_data: 'ann_user_list' }],
           [{ text: '🛠 Xem Công cụ', callback_data: 'tools_list' }],
+          [{ text: '📁 Tài liệu biểu mẫu', callback_data: 'docs_list' }],
           [
             { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
             { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
@@ -281,7 +283,9 @@ export async function handleMessage(msg: TelegramBot.Message) {
         session.state === 'editing_tool_category_desc' ||
         session.state === 'editing_tool_link_or_file' ||
         session.state === 'editing_tool_category_name' ||
-        session.state === 'editing_tool_name'
+        session.state === 'editing_tool_name' ||
+        session.state === 'adding_document_desc' ||
+        session.state === 'editing_document_desc'
       )) {
         // allow /skip command to pass through to the state machine
       } else {
@@ -298,19 +302,33 @@ export async function handleMessage(msg: TelegramBot.Message) {
     if (await handleAnnouncementState(bot, msg, command, userRole, session)) return;
     if (await handleToolsState(bot, msg, command, userRole, session)) return;
     if (await handleProposalState(bot, msg, session)) return;
+    if (await handleDocumentMessage(bot, msg, userRole, session)) return;
 
     // Handle commands if idle
     if (command === '/admin') {
       await handleAdminDashboard(bot, chatId, userRole);
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
       return;
     }
 
     // Setup topic command for admins (handles /unset_topic in private)
-    if (await handleSetTopicCommand(bot, msg, command, userRole, false, replyOptions)) return;
+    if (await handleSetTopicCommand(bot, msg, command, userRole, false, replyOptions)) {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+      return;
+    }
 
-    if (await handleAdminCommand(bot, msg, command, userRole, session, replyOptions)) return;
-    if (await handleRegulationCommand(bot, msg, command, userRole, session, replyOptions)) return;
-    if (await handleToolsCommand(bot, msg, command, userRole, session, replyOptions)) return;
+    if (await handleAdminCommand(bot, msg, command, userRole, session, replyOptions)) {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+      return;
+    }
+    if (await handleRegulationCommand(bot, msg, command, userRole, session, replyOptions)) {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+      return;
+    }
+    if (await handleToolsCommand(bot, msg, command, userRole, session, replyOptions)) {
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+      return;
+    }
 
     // Add a secret command to claim admin if needed
     if (command === '/claim_admin') {
@@ -318,6 +336,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
       roleCache.delete(userId);
       await setAdminPrivateCommands(bot, userId);
       bot.sendMessage(chatId, '✅ Bạn đã trở thành Admin!');
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
       return;
     }
   }

@@ -70,7 +70,13 @@ export type UserState =
   | 'editing_proposal_time'
   | 'editing_proposal_cost'
   | 'editing_proposal_file'
-  | 'rejecting_proposal';
+  | 'rejecting_proposal'
+  | 'adding_document_title'
+  | 'adding_document_desc'
+  | 'adding_document_file'
+  | 'editing_document_title'
+  | 'editing_document_desc'
+  | 'editing_document_file';
 
 export interface SessionData {
   state: UserState;
