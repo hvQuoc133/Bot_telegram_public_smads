@@ -82,9 +82,25 @@ export async function refreshAllRegulationTopics(bot: TelegramBot) {
                 message_id: topic.pinned_message_id,
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboard }
-            }).catch((err) => {
+            }).catch(async (err) => {
                 if (err.message.includes('message is not modified')) {
                     // Ignore this error
+                    return;
+                }
+                if (err.message.includes('message to edit not found')) {
+                    console.log(`Pinned message not found in chat ${topic.chat_id} (topic: ${topic.topic_id}). Recreating...`);
+                    try {
+                        const sentMsg = await bot.sendMessage(topic.chat_id, text, {
+                            message_thread_id: topic.topic_id || undefined,
+                            parse_mode: 'Markdown',
+                            reply_markup: { inline_keyboard: keyboard }
+                        });
+                        await bot.pinChatMessage(topic.chat_id, sentMsg.message_id).catch(console.error);
+                        await db.query('UPDATE topics SET pinned_message_id = $1 WHERE chat_id = $2 AND topic_id = $3', [sentMsg.message_id, topic.chat_id, topic.topic_id]);
+                        console.log(`Recreated and pinned regulation message in chat ${topic.chat_id} (topic: ${topic.topic_id})`);
+                    } catch (createErr) {
+                        console.error(`Failed to recreate pinned message in chat ${topic.chat_id}:`, createErr);
+                    }
                     return;
                 }
                 console.error(`Failed to edit pinned message in chat ${topic.chat_id} (topic: ${topic.topic_id}):`, err.message);
@@ -321,6 +337,7 @@ export async function handleRegulationState(
                 .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000));
             await refreshAllRegulationTopics(bot);
             await broadcastRegulationUpdate(bot);
+            await handleAdminDashboard(bot, chatId, userRole);
             return true;
         case 'editing_regulation_title':
         case 'editing_regulation_content': {
@@ -614,6 +631,7 @@ export async function handleRegulationCallback(
 
         // Go back to dashboard
         bot.deleteMessage(chatId, messageId).catch(() => { });
+        await handleAdminDashboard(bot, chatId, userRole);
         return true;
     }
 

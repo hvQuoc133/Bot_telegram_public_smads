@@ -9,7 +9,7 @@ export async function broadcastPersonnelUpdate(bot: TelegramBot) {
     const tracked = getTrackedMessages('personnel_list');
     if (tracked.length === 0) return;
 
-    const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+    const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
     const keyboard = users.rows.length > 0
         ? users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }])
         : [];
@@ -38,7 +38,7 @@ export async function refreshAllInfoTopics(bot: TelegramBot) {
     try {
         const topics = await db.query("SELECT chat_id, topic_id, pinned_message_id FROM topics WHERE feature_type = 'information' AND pinned_message_id IS NOT NULL");
 
-        const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+        const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
 
         const keyboard: any[][] = users.rows.length > 0
             ? users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }])
@@ -58,8 +58,24 @@ export async function refreshAllInfoTopics(bot: TelegramBot) {
                 message_id: topic.pinned_message_id,
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboard }
-            }).catch((err) => {
+            }).catch(async (err) => {
                 if (!err.message.includes('message is not modified')) {
+                    if (err.message.includes('message to edit not found')) {
+                        console.log(`Pinned message not found in chat ${topic.chat_id} (topic: ${topic.topic_id}). Recreating...`);
+                        try {
+                            const sentMsg = await bot.sendMessage(topic.chat_id, text, {
+                                message_thread_id: topic.topic_id || undefined,
+                                parse_mode: 'Markdown',
+                                reply_markup: { inline_keyboard: keyboard }
+                            });
+                            await bot.pinChatMessage(topic.chat_id, sentMsg.message_id).catch(console.error);
+                            await db.query('UPDATE topics SET pinned_message_id = $1 WHERE chat_id = $2 AND topic_id = $3', [sentMsg.message_id, topic.chat_id, topic.topic_id]);
+                            console.log(`Recreated and pinned info message in chat ${topic.chat_id} (topic: ${topic.topic_id})`);
+                        } catch (createErr) {
+                            console.error(`Failed to recreate pinned message in chat ${topic.chat_id}:`, createErr);
+                        }
+                        return;
+                    }
                     console.error(`Failed to edit pinned message in chat ${topic.chat_id}:`, err.message);
                 }
             });
@@ -90,7 +106,7 @@ export async function handleInfoCallback(
 
     // Refresh personnel
     if (data === 'info_refresh_personnel') {
-        const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+        const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
         const keyboard = users.rows.length > 0
             ? users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }])
             : [];
@@ -115,7 +131,7 @@ export async function handleInfoCallback(
         const isPrivate = query.message?.chat.type === 'private';
         if (!isPrivate) return false;
 
-        const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+        const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
         const keyboard = users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }]);
 
         keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'user_dashboard' }]);
@@ -143,7 +159,7 @@ export async function handleInfoCallback(
             return true;
         }
 
-        const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+        const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
         const keyboard = users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_admin_view_${u.id}` }]);
 
         keyboard.push([{ text: '➕ Thêm Nhân sự mới', callback_data: 'info_add_new' }]);
@@ -175,7 +191,8 @@ export async function handleInfoCallback(
             `👤 *Họ và tên:* ${profile.full_name}\n` +
             `🎂 *Sinh nhật:* ${profile.birthday || 'Chưa cập nhật'}\n` +
             `💼 *Vị trí:* ${profile.position || 'Chưa cập nhật'}\n` +
-            `📱 *Số điện thoại:* ${profile.phone || 'Chưa cập nhật'}`;
+            `📱 *Số điện thoại:* ${profile.phone || 'Chưa cập nhật'}\n` +
+            `📧 *Email:* ${profile.email || 'Chưa cập nhật'}`;
 
         const keyboard = [];
 
@@ -241,7 +258,8 @@ export async function handleInfoCallback(
             `*Họ và Tên:* ${profile.full_name}\n` +
             `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
             `*Vị trí:* ${profile.position || 'Trống'}\n` +
-            `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+            `*Số điện thoại:* ${profile.phone || 'Trống'}\n` +
+            `*Email:* ${profile.email || 'Trống'}\n\n` +
             `Vui lòng chọn phần muốn sửa:`;
 
         const keyboard = {
@@ -250,6 +268,7 @@ export async function handleInfoCallback(
                 [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profileId}` }],
                 [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profileId}` }],
                 [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profileId}` }],
+                [{ text: '✏️ Sửa Email', callback_data: `info_edit_field_email_${profileId}` }],
                 [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profileId}` }]
             ]
         };
@@ -271,6 +290,7 @@ export async function handleInfoCallback(
         if (field === 'birthday') { promptText = '🎂 Vui lòng nhập *Sinh nhật* mới (VD: 01/01/1990):'; state = 'editing_personnel_birthday'; }
         if (field === 'position') { promptText = '💼 Vui lòng nhập *Vị trí/Chức vụ* mới:'; state = 'editing_personnel_position'; }
         if (field === 'phone') { promptText = '📞 Vui lòng nhập *Số điện thoại* mới:'; state = 'editing_personnel_phone'; }
+        if (field === 'email') { promptText = '📧 Vui lòng nhập *Email* mới:'; state = 'editing_personnel_email'; }
 
         bot.sendMessage(chatId, promptText, { parse_mode: 'Markdown' }).then(m => {
             updateSession(userId, {
@@ -284,8 +304,8 @@ export async function handleInfoCallback(
 
     if (data.startsWith('info_edit_cancel_')) {
         bot.deleteMessage(chatId, messageId).catch(() => { });
-        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa thông tin nhân sự.').then(m => {
-            setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa thông tin nhân sự.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Quản lý Nhân sự', callback_data: 'admin_manage_personnel' }]] }
         });
         clearSession(userId);
         bot.answerCallbackQuery(query.id);
@@ -323,7 +343,7 @@ export async function handleInfoCallback(
         broadcastPersonnelUpdate(bot);
 
         // Go back to list
-        const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+        const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
         const keyboard = users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_admin_view_${u.id}` }]);
         keyboard.push([{ text: '➕ Thêm Nhân sự mới', callback_data: 'info_add_new' }]);
         keyboard.push([{ text: '🔙 Quay lại Bảng điều khiển', callback_data: 'admin_dashboard' }]);
@@ -361,7 +381,8 @@ export async function handleInfoDeepLink(
                 `*Họ và Tên:* ${profile.full_name}\n` +
                 `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
                 `*Vị trí:* ${profile.position || 'Trống'}\n` +
-                `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+                `*Số điện thoại:* ${profile.phone || 'Trống'}\n` +
+                `*Email:* ${profile.email || 'Trống'}\n\n` +
                 `Vui lòng chọn phần muốn sửa:`;
 
             const keyboard = {
@@ -370,6 +391,7 @@ export async function handleInfoDeepLink(
                     [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profileId}` }],
                     [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profileId}` }],
                     [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profileId}` }],
+                    [{ text: '✏️ Sửa Email', callback_data: `info_edit_field_email_${profileId}` }],
                     [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profileId}` }]
                 ]
             };
@@ -481,12 +503,35 @@ export async function handleInfoMessage(
         }
 
         tempData.phone = text;
+        bot.sendMessage(chatId, `Số điện thoại: *${tempData.phone}*\n\nVui lòng nhập Email:\n(/cancel để hủy, /skip để bỏ qua)`, { parse_mode: 'Markdown' })
+            .then(m => {
+                updateSession(userId, { state: 'adding_personnel_email', tempData: { ...tempData, promptMessageId: m.message_id } });
+            });
+        return true;
+    }
+
+    if (state === 'adding_personnel_email') {
+        if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
+        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+
+        if (text !== '/skip') {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+                bot.sendMessage(chatId, '⚠️ Email không hợp lệ. Vui lòng nhập lại:\n(/cancel để hủy, /skip để bỏ qua)', { parse_mode: 'Markdown' })
+                    .then(m => {
+                        updateSession(userId, { state: 'adding_personnel_email', tempData: { ...tempData, promptMessageId: m.message_id } });
+                    });
+                return true;
+            }
+            tempData.email = text;
+        } else {
+            tempData.email = null;
+        }
 
         // Save to DB
         try {
             await db.query(
-                'INSERT INTO user_profiles (full_name, birthday, position, phone, status) VALUES ($1, $2, $3, $4, $5)',
-                [tempData.full_name, tempData.birthday, tempData.position, tempData.phone, 'active']
+                'INSERT INTO user_profiles (full_name, birthday, position, phone, email, status) VALUES ($1, $2, $3, $4, $5, $6)',
+                [tempData.full_name, tempData.birthday, tempData.position, tempData.phone, tempData.email, 'active']
             );
 
             bot.sendMessage(chatId, '✅ Đã thêm nhân sự thành công!', {
@@ -512,7 +557,7 @@ export async function handleInfoMessage(
         }
     }
 
-    if (state === 'editing_personnel_name' || state === 'editing_personnel_birthday' || state === 'editing_personnel_position' || state === 'editing_personnel_phone') {
+    if (state === 'editing_personnel_name' || state === 'editing_personnel_birthday' || state === 'editing_personnel_position' || state === 'editing_personnel_phone' || state === 'editing_personnel_email') {
         if (tempData.promptMessageId) bot.deleteMessage(chatId, tempData.promptMessageId).catch(() => { });
         bot.deleteMessage(chatId, msg.message_id).catch(() => { });
 
@@ -553,6 +598,16 @@ export async function handleInfoMessage(
                 return true;
             }
             updateQuery = 'UPDATE user_profiles SET phone = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+        } else if (state === 'editing_personnel_email') {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+                bot.sendMessage(chatId, '⚠️ Email không hợp lệ. Vui lòng nhập lại:', {
+                    reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: `info_edit_cancel_${tempData.profileId}` }]] }
+                }).then(m => {
+                    updateSession(userId, { state: 'editing_personnel_email', tempData: { ...tempData, promptMessageId: m.message_id } });
+                });
+                return true;
+            }
+            updateQuery = 'UPDATE user_profiles SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
         }
 
         try {
@@ -571,7 +626,8 @@ export async function handleInfoMessage(
                     `*Họ và Tên:* ${profile.full_name}\n` +
                     `*Sinh nhật:* ${profile.birthday || 'Trống'}\n` +
                     `*Vị trí:* ${profile.position || 'Trống'}\n` +
-                    `*Số điện thoại:* ${profile.phone || 'Trống'}\n\n` +
+                    `*Số điện thoại:* ${profile.phone || 'Trống'}\n` +
+                    `*Email:* ${profile.email || 'Trống'}\n\n` +
                     `Vui lòng chọn phần muốn sửa:`;
 
                 const keyboard = {
@@ -580,11 +636,14 @@ export async function handleInfoMessage(
                         [{ text: '✏️ Sửa Sinh nhật', callback_data: `info_edit_field_birthday_${profile.id}` }],
                         [{ text: '✏️ Sửa Vị trí', callback_data: `info_edit_field_position_${profile.id}` }],
                         [{ text: '✏️ Sửa Số điện thoại', callback_data: `info_edit_field_phone_${profile.id}` }],
-                        [{ text: '❌ Hủy', callback_data: `info_edit_cancel_${profile.id}` }]
+                        [{ text: '✏️ Sửa Email', callback_data: `info_edit_field_email_${profile.id}` }],
+                        [{ text: '❌ Đóng', callback_data: `info_close_message` }]
                     ]
                 };
 
-                bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard });
+                bot.sendMessage(chatId, textMsg, { parse_mode: 'Markdown', reply_markup: keyboard }).then(m => {
+                    setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+                });
             }
 
             refreshAllInfoTopics(bot);

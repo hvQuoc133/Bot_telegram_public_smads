@@ -174,7 +174,7 @@ export async function handleProposalState(
             formattedDate = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
 
             const keyboardCost = [[{ text: '⏭ Bỏ qua', callback_data: 'prop_skip_cost' }]];
-            bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua:', {
+            bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua (ví dụ: 1.500.000 vnd hoặc $77):', {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: keyboardCost }
             }).then(m => {
@@ -461,7 +461,7 @@ export async function handleProposalCallback(
     if (data === 'prop_skip_time') {
         bot.deleteMessage(chatId, messageId!).catch(() => { });
         const keyboardCost = [[{ text: '⏭ Bỏ qua', callback_data: 'prop_skip_cost' }]];
-        bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua:', {
+        bot.sendMessage(chatId, '💰 *Bước 4: Dự trù chi phí*\n\nNhập dự trù chi phí (nếu có) hoặc bấm Bỏ qua (ví dụ: 1.500.000 vnd hoặc $77):', {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboardCost }
         }).then(m => {

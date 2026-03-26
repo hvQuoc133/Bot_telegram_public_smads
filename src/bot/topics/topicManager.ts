@@ -204,7 +204,7 @@ export async function handleSetTopicCommand(
           DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
         `, [chatId, topicId || 0, msg.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
             } else if (featureType === 'information') {
-                const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+                const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
                 const keyboard = users.rows.length > 0
                     ? users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }])
                     : [];
@@ -428,7 +428,7 @@ export async function sendInformationDashboard(
     userRole: string,
     replyOptions: TelegramBot.SendMessageOptions
 ) {
-    const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+    const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
     let text = '';
     let keyboard: InlineKeyboardButton[][] = [];
 
@@ -692,7 +692,7 @@ export async function handleTopicCallback(
           DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
         `, [chatId, topicId || 0, query.message?.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
             } else if (featureType === 'information') {
-                const users = await db.query("SELECT id, full_name, position FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
+                const users = await db.query("SELECT id, full_name, position, email FROM user_profiles WHERE status = 'active' ORDER BY full_name ASC");
                 const keyboard = users.rows.length > 0
                     ? users.rows.map(u => [{ text: `👤 ${u.full_name} - ${u.position || 'Nhân viên'}`, callback_data: `info_view_${u.id}` }])
                     : [];
@@ -732,8 +732,21 @@ export async function handleTopicCallback(
           DO UPDATE SET feature_type = $4, pinned_message_id = $5, name = $3
         `, [chatId, topicId || 0, query.message?.chat.title || `${featureName} Topic`, featureType, sentMsg.message_id]);
             } else if (featureType === 'tools') {
-                const sentMsg = await bot.sendMessage(chatId, 'Đang thiết lập...', { message_thread_id: topicId || undefined });
-                await sendToolsDashboard(bot, chatId, topicId || 0, userRole, { message_thread_id: topicId || undefined }, sentMsg.message_id);
+                const cats = await db.query('SELECT id, name FROM tool_categories ORDER BY name ASC');
+                const keyboard: InlineKeyboardButton[][] = cats.rows.map(c => [{ text: `📁 ${c.name}`, callback_data: `tools_cat_view_${c.id}` }]);
+
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                const dateStr = now.toLocaleDateString('vi-VN');
+                const text = '🛠 *DANH SÁCH CÔNG CỤ*\n\n' +
+                    (cats.rows.length > 0 ? 'Chọn một danh mục bên dưới để xem các công cụ:' : 'Hiện tại chưa có công cụ nào.') +
+                    `\n\n_(Cập nhật lúc: ${timeStr} - ${dateStr})_`;
+
+                const sentMsg = await bot.sendMessage(chatId, text, {
+                    message_thread_id: topicId || undefined,
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: keyboard }
+                });
                 await bot.pinChatMessage(chatId, sentMsg.message_id).catch(console.error);
 
                 await db.query(`

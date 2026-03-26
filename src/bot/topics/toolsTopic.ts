@@ -24,6 +24,54 @@ function clearAutoBackTimeout(messageId: number) {
     }
 }
 
+export async function refreshAllToolsTopics(bot: TelegramBot) {
+    try {
+        const topics = await db.query("SELECT chat_id, topic_id, pinned_message_id FROM topics WHERE feature_type = 'tools' AND pinned_message_id IS NOT NULL");
+
+        const cats = await db.query('SELECT id, name FROM tool_categories ORDER BY name ASC');
+        const keyboard: InlineKeyboardButton[][] = cats.rows.map(c => [{ text: `📁 ${c.name}`, callback_data: `tools_cat_view_${c.id}` }]);
+
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = now.toLocaleDateString('vi-VN');
+        const text = '🛠 *DANH SÁCH CÔNG CỤ*\n\n' +
+            (cats.rows.length > 0 ? 'Chọn một danh mục bên dưới để xem các công cụ:' : 'Hiện tại chưa có công cụ nào.') +
+            `\n\n_(Cập nhật lúc: ${timeStr} - ${dateStr})_`;
+
+        for (const topic of topics.rows) {
+            if (!topic.chat_id) continue;
+            bot.editMessageText(text, {
+                chat_id: topic.chat_id,
+                message_id: topic.pinned_message_id,
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: keyboard }
+            }).catch(async (err) => {
+                if (!err.message.includes('message is not modified')) {
+                    if (err.message.includes('message to edit not found')) {
+                        console.log(`Pinned message not found in chat ${topic.chat_id} (topic: ${topic.topic_id}). Recreating...`);
+                        try {
+                            const sentMsg = await bot.sendMessage(topic.chat_id, text, {
+                                message_thread_id: topic.topic_id || undefined,
+                                parse_mode: 'Markdown',
+                                reply_markup: { inline_keyboard: keyboard }
+                            });
+                            await bot.pinChatMessage(topic.chat_id, sentMsg.message_id).catch(console.error);
+                            await db.query('UPDATE topics SET pinned_message_id = $1 WHERE chat_id = $2 AND topic_id = $3', [sentMsg.message_id, topic.chat_id, topic.topic_id]);
+                            console.log(`Recreated and pinned tools message in chat ${topic.chat_id} (topic: ${topic.topic_id})`);
+                        } catch (createErr) {
+                            console.error(`Failed to recreate pinned message in chat ${topic.chat_id}:`, createErr);
+                        }
+                        return;
+                    }
+                    console.error(`Failed to edit pinned message in chat ${topic.chat_id}:`, err.message);
+                }
+            });
+        }
+    } catch (err) {
+        console.error('Error refreshing tools topics:', err);
+    }
+}
+
 export async function handleToolsCommand(
     bot: TelegramBot,
     msg: TelegramBot.Message,
@@ -150,6 +198,7 @@ export async function handleToolsState(
                 [name, desc, userId]
             );
             bot.sendMessage(chatId, `✅ Đã thêm danh mục công cụ: *${name}*`, { parse_mode: 'Markdown' });
+            refreshAllToolsTopics(bot);
         } catch (err) {
             console.error('Error adding tool category:', err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi thêm danh mục.');
@@ -158,26 +207,42 @@ export async function handleToolsState(
         return true;
     }
 
+    if (session.state === 'adding_tool_select_category') {
+        bot.deleteMessage(chatId, msg.message_id).catch(() => { });
+        bot.sendMessage(chatId, '⚠️ Vui lòng chọn danh mục hoặc /cancel')
+            .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 5000));
+        return true;
+    }
+
     if (session.state === 'adding_tool_name') {
-        updateSession(userId, { state: 'adding_tool_desc', tempData: { ...session.tempData, name: text } });
-        bot.sendMessage(chatId, `Tên công cụ: *${text}*\n\nVui lòng nhập mô tả cho công cụ này (hoặc gõ /skip để bỏ qua):`, {
+        const promptMessages = session.tempData.promptMessages || [];
+        promptMessages.push(msg.message_id);
+        const prompt = await bot.sendMessage(chatId, `Tên công cụ: *${text}*\n\nVui lòng nhập mô tả cho công cụ này (hoặc gõ /skip để bỏ qua):`, {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
         });
+        promptMessages.push(prompt.message_id);
+        updateSession(userId, { state: 'adding_tool_desc', tempData: { ...session.tempData, name: text, promptMessages } });
         return true;
     }
 
     if (session.state === 'adding_tool_desc') {
         const desc = command === '/skip' ? null : text;
-        updateSession(userId, { state: 'adding_tool_link_or_file', tempData: { ...session.tempData, description: desc } });
-        bot.sendMessage(chatId, `Mô tả đã được lưu.\n\nVui lòng gửi link (URL) hoặc đính kèm tệp cho công cụ này (hoặc gõ /skip để bỏ qua):`, {
+        const promptMessages = session.tempData.promptMessages || [];
+        promptMessages.push(msg.message_id);
+        const prompt = await bot.sendMessage(chatId, `Mô tả đã được lưu.\n\nVui lòng gửi link (URL) hoặc đính kèm tệp cho công cụ này (hoặc gõ /skip để bỏ qua):`, {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
         });
+        promptMessages.push(prompt.message_id);
+        updateSession(userId, { state: 'adding_tool_link_or_file', tempData: { ...session.tempData, description: desc, promptMessages } });
         return true;
     }
 
     if (session.state === 'adding_tool_link_or_file') {
+        const promptMessages = session.tempData.promptMessages || [];
+        promptMessages.push(msg.message_id);
+
         let link = null;
         let fileId = null;
         let fileType = null;
@@ -192,9 +257,11 @@ export async function handleToolsState(
             } else if (text) {
                 link = text;
             } else {
-                bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ, hoặc gõ /skip.', {
+                const prompt = await bot.sendMessage(chatId, '⚠️ Vui lòng gửi link hoặc tệp hợp lệ, hoặc gõ /skip.', {
                     reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
                 });
+                promptMessages.push(prompt.message_id);
+                updateSession(userId, { state: 'adding_tool_link_or_file', tempData: { ...session.tempData, promptMessages } });
                 return true;
             }
         }
@@ -206,7 +273,15 @@ export async function handleToolsState(
                 'INSERT INTO tools (category_id, name, description, link, file_id, file_type, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7)',
                 [categoryId, name, description, link, fileId, fileType, userId]
             );
-            bot.sendMessage(chatId, `✅ Đã thêm công cụ: *${name}*`, { parse_mode: 'Markdown' });
+            refreshAllToolsTopics(bot);
+            const successMsg = await bot.sendMessage(chatId, `✅ Đã thêm công cụ: *${name}*\n\n_(Tin nhắn này sẽ tự xóa sau 15s)_`, { parse_mode: 'Markdown' });
+            promptMessages.push(successMsg.message_id);
+
+            setTimeout(() => {
+                promptMessages.forEach((id: number) => {
+                    bot.deleteMessage(chatId, id).catch(() => { });
+                });
+            }, 15000);
         } catch (err) {
             console.error('Error adding tool:', err);
             bot.sendMessage(chatId, '❌ Có lỗi xảy ra khi thêm công cụ.');
@@ -224,6 +299,7 @@ export async function handleToolsState(
             } else {
                 await db.query('UPDATE tool_categories SET description = $1 WHERE id = $2', [text, categoryId]);
             }
+            refreshAllToolsTopics(bot);
 
             bot.sendMessage(chatId, `✅ Đã cập nhật danh mục công cụ.`).then(m => {
                 setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 3000);
@@ -288,6 +364,7 @@ export async function handleToolsState(
                 }
                 await db.query('UPDATE tools SET link = $1, file_id = $2, file_type = $3 WHERE id = $4', [link, fileId, fileType, toolId]);
             }
+            refreshAllToolsTopics(bot);
 
             bot.sendMessage(chatId, `✅ Đã cập nhật công cụ.`).then(m => {
                 setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 3000);
@@ -350,6 +427,13 @@ export async function handleToolsCallback(
     if (topicId) replyOptions.message_thread_id = topicId;
 
     if (data === 'tools_cancel') {
+        if (session.tempData?.promptMessages) {
+            session.tempData.promptMessages.forEach((id: number) => {
+                if (id !== messageId) {
+                    bot.deleteMessage(chatId, id).catch(() => { });
+                }
+            });
+        }
         clearSession(userId);
         bot.editMessageText('✅ Đã hủy thao tác.', { chat_id: chatId, message_id: messageId }).catch(() => { });
         bot.answerCallbackQuery(query.id);
@@ -400,18 +484,22 @@ export async function handleToolsCallback(
 
     if (data.startsWith('tools_cat_view_')) {
         const catId = parseInt(data.replace('tools_cat_view_', ''));
-        await sendToolsInCategory(bot, chatId, catId, messageId, replyOptions);
+        const isPrivate = query.message?.chat.type === 'private';
+        await sendToolsInCategory(bot, chatId, catId, isPrivate ? messageId : undefined, replyOptions);
         bot.answerCallbackQuery(query.id);
         return true;
     }
 
     if (data.startsWith('tools_cat_add_tool_')) {
         const catId = parseInt(data.replace('tools_cat_add_tool_', ''));
-        updateSession(userId, { state: 'adding_tool_name', tempData: { categoryId: catId } });
-        bot.sendMessage(chatId, '➕ **THÊM CÔNG CỤ MỚI**\n\nVui lòng nhập tên công cụ:', {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        const prompt = await bot.sendMessage(chatId, '➕ **THÊM CÔNG CỤ MỚI**\n\nVui lòng nhập tên công cụ:', {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: [[{ text: '❌ Hủy', callback_data: 'tools_cancel' }]] }
         });
+        const promptMessages = session.tempData?.promptMessages || [];
+        promptMessages.push(prompt.message_id);
+        updateSession(userId, { state: 'adding_tool_name', tempData: { categoryId: catId, promptMessageId: prompt.message_id, promptMessages } });
         bot.answerCallbackQuery(query.id);
         return true;
     }
@@ -443,6 +531,7 @@ export async function handleToolsCallback(
                 const tool = toolRes.rows[0];
                 if (userRole === 'admin' || tool.created_by === userId) {
                     await db.query('DELETE FROM tools WHERE id = $1', [toolId]);
+                    refreshAllToolsTopics(bot);
                     bot.answerCallbackQuery(query.id, { text: '✅ Đã xóa công cụ.' });
                     await sendToolsInCategory(bot, chatId, tool.category_id, messageId, replyOptions);
                 } else {
@@ -464,6 +553,7 @@ export async function handleToolsCallback(
         const catId = parseInt(data.replace('tools_cat_delete_', ''));
         try {
             await db.query('DELETE FROM tool_categories WHERE id = $1', [catId]);
+            refreshAllToolsTopics(bot);
             bot.answerCallbackQuery(query.id, { text: '✅ Đã xóa danh mục.' });
             await sendToolCategoriesList(bot, chatId, messageId, replyOptions);
         } catch (err) {
@@ -613,8 +703,8 @@ export async function handleToolsCallback(
 
     if (data.startsWith('tools_edit_cancel_')) {
         bot.deleteMessage(chatId, messageId).catch(() => { });
-        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa công cụ.').then(m => {
-            setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 15000);
+        bot.sendMessage(chatId, '✅ Đã hủy chỉnh sửa công cụ.', {
+            reply_markup: { inline_keyboard: [[{ text: '🔙 Quay lại Menu', callback_data: 'tools_dashboard' }]] }
         });
         clearSession(userId);
         bot.answerCallbackQuery(query.id);
@@ -635,10 +725,11 @@ async function startAddingTool(bot: TelegramBot, chatId: number, userId: number,
         const keyboard: InlineKeyboardButton[][] = cats.rows.map(c => [{ text: `📁 ${c.name}`, callback_data: `tools_cat_add_tool_${c.id}` }]);
         keyboard.push([{ text: '❌ Hủy', callback_data: 'tools_cancel' }]);
 
-        bot.sendMessage(chatId, '➕ **THÊM CÔNG CỤ MỚI**\n\nVui lòng chọn danh mục cho công cụ:', {
+        const prompt = await bot.sendMessage(chatId, '➕ **THÊM CÔNG CỤ MỚI**\n\nVui lòng chọn danh mục cho công cụ:', {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard }
         });
+        updateSession(userId, { state: 'adding_tool_select_category', tempData: { promptMessageId: prompt.message_id, promptMessages: [prompt.message_id] } });
     } catch (err) {
         console.error('Error starting add tool:', err);
         bot.sendMessage(chatId, '❌ Có lỗi xảy ra.');
@@ -652,9 +743,9 @@ async function sendToolsList(bot: TelegramBot, chatId: number, messageId?: numbe
         const keyboard: InlineKeyboardButton[][] = cats.rows.map(c => [{ text: `📁 ${c.name}`, callback_data: `tools_cat_view_${c.id}` }]);
 
         if (chatId > 0) {
-            keyboard.push([{ text: 'Đóng', callback_data: 'user_dashboard' }]);
+            keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'user_dashboard' }]);
         } else {
-            keyboard.push([{ text: 'Đóng', callback_data: 'tools_dashboard' }]);
+            keyboard.push([{ text: '🔙 Quay lại Menu', callback_data: 'tools_dashboard' }]);
         }
 
         let sentMsg: TelegramBot.Message | undefined;

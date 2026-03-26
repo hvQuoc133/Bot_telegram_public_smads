@@ -65,12 +65,12 @@ export async function handleMessage(msg: TelegramBot.Message) {
       if (userRes.rows.length === 0) {
         const countRes = await db.query('SELECT COUNT(*) FROM users');
         const isFirstUser = parseInt(countRes.rows[0].count) === 0;
-        userRole = (isFirstUser || isGroupCreator) ? 'admin' : 'user';
+        userRole = (isFirstUser || isGroupCreator || isGroupAdmin) ? 'admin' : 'user';
         await db.query('INSERT INTO users (id, username, first_name, last_name, role) VALUES ($1, $2, $3, $4, $5)', [userId, username, firstName, lastName, userRole]);
       } else {
         userRole = userRes.rows[0].role;
-        // Auto-promote group creator to admin if they aren't already
-        if (isGroupCreator && userRole !== 'admin') {
+        // Auto-promote group creator or admin to bot admin if they aren't already
+        if ((isGroupCreator || isGroupAdmin) && userRole !== 'admin') {
           userRole = 'admin';
           await db.query("UPDATE users SET role = 'admin', first_name = $1, last_name = $2 WHERE id = $3", [firstName, lastName, userId]);
           await setAdminPrivateCommands(bot, userId);
@@ -238,7 +238,7 @@ export async function handleMessage(msg: TelegramBot.Message) {
           [{ text: '🛠 Xem Công cụ', callback_data: 'tools_list' }],
           [
             { text: '📝 Gửi báo cáo', callback_data: 'rep_create' },
-            { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_stats' }
+            { text: '📋 Lịch sử báo cáo', callback_data: 'rep_my_list' }
           ],
           [
             { text: '💡 Tạo đề xuất', url: `https://t.me/${botUsername}?start=create_proposal` },
@@ -255,12 +255,17 @@ export async function handleMessage(msg: TelegramBot.Message) {
     }
 
     if (command === '/cancel') {
-      if (session.tempData?.promptMessageId) {
+      if (session.tempData?.promptMessages) {
+        session.tempData.promptMessages.forEach((id: number) => {
+          bot.deleteMessage(chatId, id).catch(() => { });
+        });
+      } else if (session.tempData?.promptMessageId) {
         bot.deleteMessage(chatId, session.tempData.promptMessageId).catch(() => { });
       }
       clearSession(userId);
       bot.sendMessage(chatId, '✅ Đã hủy thao tác hiện tại.')
         .then(m => setTimeout(() => bot.deleteMessage(chatId, m.message_id).catch(() => { }), 10000));
+      bot.deleteMessage(chatId, msg.message_id).catch(() => { });
       return;
     }
 

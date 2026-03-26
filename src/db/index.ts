@@ -86,10 +86,13 @@ export async function initDb() {
         birthday VARCHAR(50),
         position VARCHAR(255),
         phone VARCHAR(50),
+        email VARCHAR(255),
         status VARCHAR(50) DEFAULT 'active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS email VARCHAR(255);
 
       CREATE TABLE IF NOT EXISTS reports (
         id SERIAL PRIMARY KEY,
