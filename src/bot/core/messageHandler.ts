@@ -12,6 +12,7 @@ import { handleAnnouncementDeepLink, handleAnnouncementState } from '../topics/a
 import { handleToolsDeepLink, handleToolsState, handleToolsCommand } from '../topics/toolsTopic';
 import { handleProposalDeepLink, handleProposalState } from '../topics/proposalTopic';
 import { handleDocumentMessage, handleDocumentDeepLink } from '../topics/documentTopic';
+import { handleConfigCostMessage } from '../commands/configCost';
 
 const commandCache = new Map<string, number>();
 const COMMAND_COOLDOWN = 15000; // 15 seconds
@@ -305,6 +306,8 @@ export async function handleMessage(msg: TelegramBot.Message) {
     if (await handleToolsState(bot, msg, command, userRole, session)) return;
     if (await handleProposalState(bot, msg, session)) return;
     if (await handleDocumentMessage(bot, msg, userRole, session)) return;
+
+    if (await handleConfigCostMessage(bot, msg)) return;
 
     // Handle commands if idle
     if (command === '/admin') {

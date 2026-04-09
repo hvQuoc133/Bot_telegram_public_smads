@@ -79,7 +79,17 @@ export type UserState =
   | 'adding_document_file'
   | 'editing_document_title'
   | 'editing_document_desc'
-  | 'editing_document_file';
+  | 'editing_document_file'
+  | 'creating_cost_date'
+  | 'creating_cost_category'
+  | 'creating_cost_amount'
+  | 'creating_cost_unit'
+  | 'creating_cost_payer'
+  | 'creating_cost_notes'
+  | 'config_cost_month'
+  | 'config_cost_sheet'
+  | 'config_cost_folder'
+  | string;
 
 export interface SessionData {
   state: UserState;

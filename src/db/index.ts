@@ -186,6 +186,8 @@ export async function initDb() {
         admin_id BIGINT REFERENCES users(id),
         reject_reason TEXT,
         message_id BIGINT,
+        cost_details JSONB,
+        admin_receipts JSONB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -195,6 +197,20 @@ export async function initDb() {
       ALTER TABLE proposals ALTER COLUMN start_time TYPE TIMESTAMPTZ USING start_time AT TIME ZONE 'UTC';
       ALTER TABLE proposals ALTER COLUMN end_time TYPE TIMESTAMPTZ USING end_time AT TIME ZONE 'UTC';
       ALTER TABLE proposals ALTER COLUMN type TYPE VARCHAR(255);
+      ALTER TABLE proposals ADD COLUMN IF NOT EXISTS cost_details JSONB;
+      ALTER TABLE proposals ADD COLUMN IF NOT EXISTS admin_receipts JSONB;
+
+      CREATE TABLE IF NOT EXISTS monthly_configs (
+        id SERIAL PRIMARY KEY,
+        month INTEGER NOT NULL,
+        year INTEGER NOT NULL,
+        sheet_url TEXT NOT NULL,
+        folder_url TEXT NOT NULL,
+        created_by BIGINT REFERENCES users(id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(month, year)
+      );
 
       CREATE TABLE IF NOT EXISTS tool_categories (
         id SERIAL PRIMARY KEY,

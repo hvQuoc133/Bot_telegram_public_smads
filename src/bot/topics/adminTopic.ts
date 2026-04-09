@@ -475,6 +475,7 @@ export async function handleAdminCallback(
             [{ text: '❌ Đề xuất đã từ chối', callback_data: 'prop_admin_filter_REJECTED' }],
             [{ text: '👤 Lịch sử theo người dùng', callback_data: 'prop_admin_filter_user' }],
             [{ text: '📂 Quản lý Danh mục Đề xuất', callback_data: 'prop_admin_manage_cats' }],
+            [{ text: '⚙️ Cấu hình Sheet & Folder Chi phí', callback_data: 'admin_config_cost' }],
             [{ text: '🔙 Quay lại', callback_data: 'admin_dashboard' }]
         ];
         bot.editMessageText(text, {
@@ -483,6 +484,18 @@ export async function handleAdminCallback(
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard }
         }).catch(console.error);
+        bot.answerCallbackQuery(query.id);
+        return true;
+    }
+
+    if (data === 'admin_config_cost') {
+        bot.deleteMessage(chatId, messageId).catch(() => { });
+        bot.sendMessage(chatId, '⚙️ *CẤU HÌNH SHEET & FOLDER CHI PHÍ*\n\nVui lòng nhập Tháng và Năm (Định dạng: MM/YYYY, VD: 04/2026):', { parse_mode: 'Markdown' }).then(m => {
+            updateSession(userId, {
+                state: 'config_cost_month',
+                tempData: { promptMessageId: m.message_id }
+            });
+        });
         bot.answerCallbackQuery(query.id);
         return true;
     }

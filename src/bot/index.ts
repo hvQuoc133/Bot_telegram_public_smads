@@ -5,10 +5,14 @@ import { handleCallbackQuery } from './core/callbackHandler';
 import { setupCommands } from './utils/setupCommands';
 import { bot } from './botInstance';
 import { startScheduler } from './services/scheduler';
+import { setupConfigCostCommand } from './commands/configCost';
 
 export function initBot() {
   // Setup commands for the menu button
   setupCommands(bot);
+
+  // Setup config cost command
+  setupConfigCostCommand(bot);
 
   // Start the background scheduler
   startScheduler();

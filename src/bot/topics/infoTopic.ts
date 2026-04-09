@@ -398,9 +398,9 @@ export async function handleInfoDeepLink(
                 ]
             };
 
-            bot.sendMessage(chatId, textMsg, { message_thread_id: query.message?.message_thread_id, parse_mode: 'Markdown', reply_markup: keyboard });
+            bot.sendMessage(chatId, textMsg, { message_thread_id: msg.message_thread_id, parse_mode: 'Markdown', reply_markup: keyboard });
         } else {
-            bot.sendMessage(chatId, '❌ Không tìm thấy thông tin nhân sự.', { message_thread_id: query.message?.message_thread_id });
+            bot.sendMessage(chatId, '❌ Không tìm thấy thông tin nhân sự.', { message_thread_id: msg.message_thread_id });
         }
         return true;
     }
